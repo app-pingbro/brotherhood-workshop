@@ -1,29 +1,192 @@
-<!doctype html>
-<html lang="id">
+<!DOCTYPE html>
+<html lang="id" data-theme="light">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>Brotherhood Workshop Manager</title>
-<meta name="description" content="Laporan produksi &amp; keuangan bulanan untuk PINGBRO, SUNRISE, dan BROTHERHOOD." />
-<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22><rect width=%2224%22 height=%2224%22 rx=%226%22 fill=%22%23101010%22/><text x=%2212%22 y=%2216.5%22 font-size=%2211%22 text-anchor=%22middle%22 fill=%22%23C6EF4E%22 font-family=%22sans-serif%22 font-weight=%22800%22>BW</text></svg>" />
-<link rel="stylesheet" href="css/theme.css" />
-<link rel="stylesheet" href="css/style.css" />
-<script>
-  // Apply saved theme before first paint to avoid a flash-of-wrong-theme.
-  // Default is LIGHT unless the user explicitly chose dark before.
-  (function () {
-    try {
-      var t = localStorage.getItem('bw_theme');
-      if (t === 'dark') document.documentElement.setAttribute('data-theme', 'dark');
-      else document.documentElement.setAttribute('data-theme', 'light');
-    } catch (e) { document.documentElement.setAttribute('data-theme', 'light'); }
-  })();
-</script>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Brotherhood Workshop Manager</title>
+  <meta name="description" content="Laporan Workshop Brotherhood — PING BRO, SUNRISE, BROTHERHOOD">
+
+  <!-- Bootstrap 5 (grid, modal) & Bootstrap Icons -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+  <!-- Outfit (tampilan/angka), Inter (isi), JetBrains Mono (ID/kode) — sesuai DESIGN.md -->
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500&family=Outfit:wght@500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
-  <div id="shell-root"></div>
-  <div id="toast-stack" aria-live="polite"></div>
 
-  <script type="module" src="js/main.js"></script>
+  <!-- Loading awal -->
+  <div id="loadingOverlay" class="loading-overlay">
+    <img src="img/logo.png" alt="Brotherhood Workshop">
+    <div class="spin"></div>
+    <div class="caption">Memuat Brotherhood Workshop Manager...</div>
+  </div>
+
+  <!-- ══════════ LOGIN ══════════ -->
+  <div id="loginScreen" class="login-wrap hide">
+    <form class="login-card" id="loginForm" autocomplete="off">
+      <img src="img/logo.png" alt="Brotherhood Workshop" class="logo-lg">
+      <h1>Laporan Workshop</h1>
+      <p>Brotherhood Workshop Manager<br>PING BRO · SUNRISE · BROTHERHOOD</p>
+      <div id="loginError" class="login-error hide"></div>
+      <div class="field">
+        <label for="loginUser">Username</label>
+        <input id="loginUser" class="input-pill" type="text" placeholder="owner / admin" autocapitalize="none" autocomplete="username" required>
+      </div>
+      <div class="field">
+        <label for="loginPin">PIN</label>
+        <input id="loginPin" class="input-pill" type="password" inputmode="numeric" maxlength="8" placeholder="••••••" autocomplete="current-password" required>
+      </div>
+      <button id="loginBtn" type="submit" class="btn-pill btn-black w-100">Masuk</button>
+      <div class="caption mt-12" id="loginKop">Brotherhood Workshop Manager</div>
+    </form>
+  </div>
+
+  <!-- ══════════ APLIKASI ══════════ -->
+  <div id="appShell" class="app-shell">
+
+    <nav class="rail" id="rail">
+      <div class="logo"><img src="img/logo.png" alt="Brotherhood Workshop"></div>
+      <div class="rail-nav" id="railNav"></div>
+      <div class="rail-foot">
+        <button class="rail-item" onclick="App.logout()" title="Keluar"><i class="bi bi-box-arrow-left"></i><span>Keluar</span></button>
+      </div>
+    </nav>
+
+    <nav class="bottom-bar" id="bottomBar"></nav>
+
+    <main class="main-area">
+
+      <header class="topbar" id="topbar">
+        <div class="brand"><img src="img/logo.png" alt="Brotherhood Workshop"><span>Brotherhood</span></div>
+
+        <div class="unit-dd" id="unitDd">
+          <button type="button" class="unit-btn" id="unitBtn" onclick="App.toggleUnitMenu(event)">
+            <span class="unit-dots" id="unitDots"></span>
+            <span id="unitLabel">Semua Unit</span>
+            <i class="bi bi-chevron-down" style="font-size:11px"></i>
+          </button>
+          <div class="unit-menu" id="unitMenu"></div>
+        </div>
+
+        <div class="period-pills" id="periodPills">
+          <button data-p="hari" onclick="App.setPeriode('hari')">Hari Ini</button>
+          <button data-p="minggu" onclick="App.setPeriode('minggu')">Minggu Ini</button>
+          <button data-p="bulan" class="on" onclick="App.setPeriode('bulan')">Bulan Ini</button>
+          <button data-p="rentang" onclick="App.setPeriode('rentang')">Rentang</button>
+        </div>
+        <div class="range-pop" id="rangePop">
+          <input type="date" id="rgDari" class="input-pill" aria-label="Dari tanggal">
+          <span class="caption">s/d</span>
+          <input type="date" id="rgSampai" class="input-pill" aria-label="Sampai tanggal">
+          <button class="btn-pill btn-black sm" onclick="App.terapkanRentang()">Terapkan</button>
+        </div>
+
+        <div class="spacer"></div>
+        <button class="icon-btn" id="btnTheme" onclick="toggleTheme()" title="Mode gelap"><i class="bi bi-moon-stars"></i></button>
+        <span class="chip-owner" id="userChip">—</span>
+      </header>
+
+      <!-- Setiap modul: 1 <section> kosong, isinya dirender pages.js (SPA — tanpa reload) -->
+      <section id="section-dashboard" class="content-section active"><div id="body-dashboard"></div></section>
+      <section id="section-order" class="content-section"><div id="body-order"></div></section>
+      <section id="section-orderForm" class="content-section"><div id="body-orderForm"></div></section>
+      <section id="section-orderDetail" class="content-section"><div id="body-orderDetail"></div></section>
+      <section id="section-piutang" class="content-section"><div id="body-piutang"></div></section>
+      <section id="section-karyawan" class="content-section"><div id="body-karyawan"></div></section>
+      <section id="section-pekerjaan" class="content-section"><div id="body-pekerjaan"></div></section>
+      <section id="section-absensi" class="content-section"><div id="body-absensi"></div></section>
+      <section id="section-kasbon" class="content-section"><div id="body-kasbon"></div></section>
+      <section id="section-gaji" class="content-section"><div id="body-gaji"></div></section>
+      <section id="section-pengeluaran" class="content-section"><div id="body-pengeluaran"></div></section>
+      <section id="section-rekap" class="content-section"><div id="body-rekap"></div></section>
+      <section id="section-laporan" class="content-section"><div id="body-laporan"></div></section>
+      <section id="section-impor" class="content-section"><div id="body-impor"></div></section>
+      <section id="section-master" class="content-section"><div id="body-master"></div></section>
+      <section id="section-pengaturan" class="content-section"><div id="body-pengaturan"></div></section>
+
+    </main>
+  </div>
+
+  <!-- ══════════ MODAL ══════════ -->
+  <div class="modal fade" id="modalKonfirmasi" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+      <div class="modal-content">
+        <div class="modal-header"><h5 class="modal-title" id="konfTitle">Konfirmasi</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+        <div class="modal-body" id="konfBody"></div>
+        <div class="modal-footer">
+          <button class="btn-pill btn-ghost" data-bs-dismiss="modal">Batal</button>
+          <button class="btn-pill btn-danger-x" id="konfOk">Ya, Lanjutkan</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal fade" id="modalForm" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+      <div class="modal-content">
+        <div class="modal-header"><h5 class="modal-title" id="formTitle">Form</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+        <div class="modal-body" id="formBody"></div>
+        <div class="modal-footer">
+          <button class="btn-pill btn-ghost" data-bs-dismiss="modal">Batal</button>
+          <button class="btn-pill btn-black" id="formOk">Simpan</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal fade" id="modalBayar" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+      <div class="modal-content">
+        <div class="modal-header"><h5 class="modal-title">Catat Pembayaran</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+        <div class="modal-body" id="bayarBody"></div>
+        <div class="modal-footer">
+          <button class="btn-pill btn-ghost" data-bs-dismiss="modal">Batal</button>
+          <button class="btn-pill btn-lime" id="bayarSimpan">Simpan Pembayaran</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Wajib ganti PIN -->
+  <div class="modal fade" id="modalPin" tabindex="-1" data-bs-backdrop="static" data-bs-keyboard="false">
+    <div class="modal-dialog modal-dialog-centered">
+      <div class="modal-content">
+        <div class="modal-header"><h5 class="modal-title">Ganti PIN</h5></div>
+        <div class="modal-body">
+          <div class="notice notice-amber mb-16"><i class="bi bi-shield-lock"></i><div id="pinNotice">PIN bawaan harus diganti sebelum aplikasi dipakai.</div></div>
+          <div class="field mb-16"><label>PIN saat ini</label><input id="pinLama" class="input-pill" type="password" inputmode="numeric" maxlength="8" autocomplete="off"></div>
+          <div class="field mb-16"><label>PIN baru (4–8 angka)</label><input id="pinBaru" class="input-pill" type="password" inputmode="numeric" maxlength="8" autocomplete="off"></div>
+          <div class="field"><label>Ulangi PIN baru</label><input id="pinBaru2" class="input-pill" type="password" inputmode="numeric" maxlength="8" autocomplete="off"></div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn-pill btn-ghost hide" id="pinBatal" data-bs-dismiss="modal">Batal</button>
+          <button class="btn-pill btn-black" id="pinSimpan">Simpan PIN</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast-wrap" id="toastWrap"></div>
+
+  <!-- Indikator sinkron non-blocking (Instant UX) -->
+  <div class="sync-indicator" id="syncIndicator"><span class="spin spin-sm"></span><span>Menyinkron data...</span></div>
+
+  <!-- Area cetak terisolasi — dipakai Pages.cetakSlipGaji() agar hasil cetak/Simpan-sbg-PDF browser
+       hanya berisi slip, bukan seluruh tampilan aplikasi di belakangnya. -->
+  <div id="printArea"></div>
+
+  <!-- Bootstrap JS (modal) & Chart.js & SheetJS (baca .xlsx di klien, sesuai alur Impor Excel) -->
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+
+  <script src="js/config.js"></script>
+  <script src="js/state.js"></script>
+  <script src="js/ui.js"></script>
+  <script src="js/api.js"></script>
+  <script src="js/pages.js"></script>
+  <script src="js/import.js"></script>
+  <script src="js/app.js"></script>
 </body>
 </html>
