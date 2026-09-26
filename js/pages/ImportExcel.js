@@ -8,7 +8,10 @@
 // confirmImport exactly per PRD section 24.
 // ============================================================================
 import { fetchData, postData } from '../api.js';
+<<<<<<< HEAD
 import { invalidate, invalidatePrefix } from '../cache.js';
+=======
+>>>>>>> 5f42973feb501a493914b033fc6c15a9cc0baf2e
 import { formatCurrency, escapeHtml, toast, badge } from '../ui.js';
 import { icon } from '../icons.js';
 import { getCurrentPeriod, getLookups } from '../state.js';
@@ -301,6 +304,7 @@ async function runConfirm() {
     return;
   }
   toast('Import berhasil disimpan.', 'success');
+<<<<<<< HEAD
   // Imported rows land straight in SEWING_TRANSACTIONS/PRINTING_TRANSACTIONS
   // via a direct DB write (not through _shared.js's save flow), so the
   // cache invalidation that flow normally does has to happen here instead —
@@ -310,6 +314,8 @@ async function runConfirm() {
   invalidate('getMonthlyRecap');
   invalidatePrefix('dashRecent');
   invalidatePrefix('dashTrend');
+=======
+>>>>>>> 5f42973feb501a493914b033fc6c15a9cc0baf2e
   const batchId = (res.data && (res.data.import_batch_id || res.data.batchId)) || '';
   root.innerHTML = `
     <div class="notice" style="background:var(--status-success-bg);color:var(--status-success-fg)">${icon('check')} Import berhasil disimpan${batchId ? ` &mdash; Batch <code>${escapeHtml(batchId)}</code>` : ''}.</div>

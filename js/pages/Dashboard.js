@@ -10,7 +10,10 @@
 // against either casing; see the handoff notes for the assumed shape.
 // ============================================================================
 import { fetchData } from '../api.js';
+<<<<<<< HEAD
 import { fetchSWR, swr } from '../cache.js';
+=======
+>>>>>>> 5f42973feb501a493914b033fc6c15a9cc0baf2e
 import { formatCurrency, skeletonKpis, skeletonTable, emptyState, escapeHtml, pick, badge } from '../ui.js';
 import { icon } from '../icons.js';
 import { getState, getCurrentPeriod, getOwnerFilter, getLookups } from '../state.js';
@@ -48,6 +51,7 @@ export async function render(container) {
     return;
   }
 
+<<<<<<< HEAD
   // Instant UX (gas-instant-ux Prinsip 2/4 — stale-while-revalidate): each
   // section paints from cache the moment this function is called (0ms) if a
   // previous visit to this period/owner already loaded it, then quietly
@@ -102,6 +106,20 @@ async function loadTrendSection(period) {
       document.getElementById('dash-chart').innerHTML = `<div class="notice notice-critical">${icon('alert')} Gagal memuat tren.</div>`;
     }
   }
+=======
+  const [recap, recent, trend] = await Promise.allSettled([
+    fetchData('getMonthlyRecap', { period_id: period.id }),
+    loadRecentTransactions(period),
+    loadTrend(period)
+  ]);
+
+  renderKpis(recap.status === 'fulfilled' ? recap.value : null);
+  renderStats(recap.status === 'fulfilled' ? recap.value : null);
+  document.getElementById('dash-chart').innerHTML = trend.status === 'fulfilled'
+    ? lineAreaChart(trend.value, { colorVar: '--color-primary' }) + legendNote()
+    : `<div class="notice notice-critical">${icon('alert')} Gagal memuat tren.</div>`;
+  renderRecent(recent.status === 'fulfilled' ? recent.value : []);
+>>>>>>> 5f42973feb501a493914b033fc6c15a9cc0baf2e
 }
 
 function legendNote() {

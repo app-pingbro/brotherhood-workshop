@@ -6,7 +6,10 @@
 // validation, computed previews and period-lock behavior.
 // ============================================================================
 import { fetchData, postData } from '../api.js';
+<<<<<<< HEAD
 import { fetchSWR, peek, invalidate, invalidatePrefix } from '../cache.js';
+=======
+>>>>>>> 5f42973feb501a493914b033fc6c15a9cc0baf2e
 import { icon } from '../icons.js';
 import {
   formatCurrency, formatDate, skeletonTable, emptyState, escapeHtml,
@@ -94,6 +97,7 @@ export async function renderCrudPage(container, opts) {
 
   let rows = [];
 
+<<<<<<< HEAD
   // Instant UX (gas-instant-ux Prinsip 2/4): stale-while-revalidate. If this
   // exact list (action + period + owner + local filters) was already loaded
   // earlier in the session, paint it immediately — no skeleton, no wait —
@@ -102,17 +106,29 @@ export async function renderCrudPage(container, opts) {
   // which forces a fresh fetch) still shows the skeleton while it waits.
   async function load({ force = false } = {}) {
     const listRoot = document.getElementById('crud-list');
+=======
+  async function load() {
+    const listRoot = document.getElementById('crud-list');
+    listRoot.innerHTML = skeletonTable((opts.columns || []).length + 1, 5);
+>>>>>>> 5f42973feb501a493914b033fc6c15a9cc0baf2e
     if (!period) {
       listRoot.innerHTML = emptyState('Belum ada periode dipilih', 'Gunakan selector periode di kanan atas.', '\u{1F4C5}');
       return;
     }
+<<<<<<< HEAD
     const params = { ...(opts.listParams ? opts.listParams() : {}), ...localFilterValues };
 
     function apply(data) {
+=======
+    try {
+      const params = { ...(opts.listParams ? opts.listParams() : {}), ...localFilterValues };
+      const data = await fetchData(opts.listAction, params);
+>>>>>>> 5f42973feb501a493914b033fc6c15a9cc0baf2e
       rows = Array.isArray(data) ? data : (data && data.items) || [];
       if (opts.onRowsLoaded) opts.onRowsLoaded(rows);
       renderTable(rows);
       if (opts.renderExtra) opts.renderExtra(document.getElementById('crud-extra'), rows);
+<<<<<<< HEAD
     }
 
     const cached = peek(opts.listAction, params);
@@ -128,6 +144,10 @@ export async function renderCrudPage(container, opts) {
       // if we had cached data on screen already, keep showing it and let the
       // toast (fired centrally by api.js) carry the error instead of
       // yanking working data off the page.
+=======
+    } catch (e) {
+      listRoot.innerHTML = `<div class="notice notice-critical">${icon('alert')} Gagal memuat data: ${escapeHtml(e.message)}</div>`;
+>>>>>>> 5f42973feb501a493914b033fc6c15a9cc0baf2e
     }
   }
 
@@ -177,12 +197,16 @@ export async function renderCrudPage(container, opts) {
     const res = await postData(opts.deleteAction, { id: row.id });
     if (res.success) {
       toast('Data berhasil dihapus.', 'success');
+<<<<<<< HEAD
       invalidate(opts.listAction);
       invalidate('getMonthlyRecap'); // deletions change totals shown on Dashboard/Rekap Bulanan
       invalidate('getSalarySlip'); // payroll/Kasbon edits change Slip Gaji too
       invalidatePrefix('dashRecent'); // Dashboard's merged Jahit+Sablon "recent" cache
       invalidatePrefix('dashTrend'); // Dashboard's per-period trend cache
       load({ force: true });
+=======
+      load();
+>>>>>>> 5f42973feb501a493914b033fc6c15a9cc0baf2e
     }
   }
 
@@ -215,12 +239,16 @@ export async function renderCrudPage(container, opts) {
           if (res.success) {
             toast('Data berhasil disimpan.', 'success');
             closeModal();
+<<<<<<< HEAD
             invalidate(opts.listAction);
             invalidate('getMonthlyRecap'); // saves change totals shown on Dashboard/Rekap Bulanan
             invalidate('getSalarySlip'); // payroll/Kasbon edits change Slip Gaji too
             invalidatePrefix('dashRecent');
             invalidatePrefix('dashTrend');
             load({ force: true });
+=======
+            load();
+>>>>>>> 5f42973feb501a493914b033fc6c15a9cc0baf2e
           } else if (res.fieldErrors) {
             applyFieldErrors(formRoot, res.fieldErrors);
           }

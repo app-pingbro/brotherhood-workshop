@@ -6,7 +6,10 @@
 import { OWNERS } from './config.js';
 import { icon } from './icons.js';
 import { fetchData } from './api.js';
+<<<<<<< HEAD
 import { fetchSWR, invalidate } from './cache.js';
+=======
+>>>>>>> 5f42973feb501a493914b033fc6c15a9cc0baf2e
 import {
   getState, onStateChange, getToken, getUser, setLookups, getLookups,
   getCurrentPeriod, setCurrentPeriodId, getOwnerFilter, setOwnerFilter
@@ -96,6 +99,7 @@ async function handleRoute() {
 
 async function loadLookups() {
   try {
+<<<<<<< HEAD
     // Instant UX (gas-instant-ux Prinsip 3 — cache master data, don't
     // re-fetch it per page): getLookups() is fetched once per session
     // already (lookupsLoaded guards every subsequent navigation), and this
@@ -110,12 +114,18 @@ async function loadLookups() {
       setLookups(data || {});
       renderPeriodSelect();
     }, { ttlMs: 30 * 60 * 1000 });
+=======
+    const data = await fetchData('getLookups', {});
+    setLookups(data || {});
+    renderPeriodSelect();
+>>>>>>> 5f42973feb501a493914b033fc6c15a9cc0baf2e
     lookupsLoaded = true;
   } catch (e) {
     // fetchData already toasts; keep app usable, periods dropdown stays empty
   }
 }
 
+<<<<<<< HEAD
 // Exported for pages that mutate master data (Master Data CRUD, Rekap
 // Bulanan's Close/Reopen Periode) so the shared lookups cache/state update
 // immediately instead of waiting out the TTL above.
@@ -131,6 +141,8 @@ export async function refreshLookups() {
   }
 }
 
+=======
+>>>>>>> 5f42973feb501a493914b033fc6c15a9cc0baf2e
 async function mountPage(pageModule) {
   const container = document.getElementById('view');
   if (currentPage && typeof currentPage.onLeave === 'function') {

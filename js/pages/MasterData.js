@@ -14,15 +14,23 @@
 //  - Users' password is only sent on create/explicit reset (non-empty
 //    field), matching the Users sheet's hash+salt storage model.
 // ============================================================================
+<<<<<<< HEAD
 import { postData } from '../api.js';
 import { fetchSWR, peek, invalidate } from '../cache.js';
+=======
+import { fetchData, postData } from '../api.js';
+>>>>>>> 5f42973feb501a493914b033fc6c15a9cc0baf2e
 import { buildForm } from './_shared.js';
 import {
   formatCurrency, escapeHtml, badge, skeletonTable, emptyState, toast,
   openModal, closeModal, confirmDialog
 } from '../ui.js';
 import { icon } from '../icons.js';
+<<<<<<< HEAD
 import { getLookups, setLookups } from '../state.js';
+=======
+import { getLookups } from '../state.js';
+>>>>>>> 5f42973feb501a493914b033fc6c15a9cc0baf2e
 import { PRICE_CATEGORY } from '../config.js';
 
 const TABS = [
@@ -62,6 +70,7 @@ export async function render(container) {
 async function renderTab() {
   const body = document.getElementById('md-body');
   const cfg = ENTITY_CONFIG[activeTab];
+<<<<<<< HEAD
   const params = { entity: activeTab };
   // Instant UX: paint the previously-loaded rows for this tab immediately
   // (switching Owner -> Pekerja -> Owner again feels instant), then
@@ -95,6 +104,22 @@ async function invalidateAfterWrite(entityKey) {
   try {
     await fetchSWR('getLookups', {}, (fresh) => setLookups(fresh || {}), { force: true });
   } catch (e) { /* next navigation will retry naturally */ }
+=======
+  body.innerHTML = `
+    <div class="page-header"><div></div><div class="page-header__actions"><button class="btn btn-primary" id="md-add">${icon('plus', 15)} Tambah ${escapeHtml(cfg.label)}</button></div></div>
+    <div id="md-list">${skeletonTable(cfg.columns.length + 1, 5)}</div>
+  `;
+  document.getElementById('md-add').addEventListener('click', () => openEntityForm(cfg, null));
+
+  let rows = [];
+  try {
+    rows = await fetchData('getMaster', { entity: activeTab }) || [];
+  } catch (e) {
+    document.getElementById('md-list').innerHTML = `<div class="notice notice-critical">${icon('alert')} Gagal memuat data.</div>`;
+    return;
+  }
+  renderList(cfg, rows);
+>>>>>>> 5f42973feb501a493914b033fc6c15a9cc0baf2e
 }
 
 function renderList(cfg, rows) {
@@ -124,13 +149,21 @@ function renderList(cfg, rows) {
 async function toggleActive(cfg, row) {
   if (row.active === false) {
     const res = await postData('saveMaster', { entity: cfg.key, data: { ...row, active: true } });
+<<<<<<< HEAD
     if (res.success) { toast('Diaktifkan kembali.', 'success'); await invalidateAfterWrite(cfg.key); renderTab(); }
+=======
+    if (res.success) { toast('Diaktifkan kembali.', 'success'); renderTab(); }
+>>>>>>> 5f42973feb501a493914b033fc6c15a9cc0baf2e
     return;
   }
   const ok = await confirmDialog(`Nonaktifkan "${row.name || row.email || row.key || row.id}"? Data lama yang sudah dipakai transaksi tetap tersimpan.`, { confirmLabel: 'Nonaktifkan' });
   if (!ok) return;
   const res = await postData('deactivateMaster', { entity: cfg.key, id: row.id });
+<<<<<<< HEAD
   if (res.success) { toast('Berhasil dinonaktifkan.', 'success'); await invalidateAfterWrite(cfg.key); renderTab(); }
+=======
+  if (res.success) { toast('Berhasil dinonaktifkan.', 'success'); renderTab(); }
+>>>>>>> 5f42973feb501a493914b033fc6c15a9cc0baf2e
 }
 
 function openEntityForm(cfg, row) {
@@ -145,7 +178,11 @@ function openEntityForm(cfg, row) {
         const payload = cfg.buildPayload ? cfg.buildPayload(finalValues) : finalValues;
         if (row) payload.id = row.id;
         const res = await postData('saveMaster', { entity: cfg.key, data: payload });
+<<<<<<< HEAD
         if (res.success) { toast('Data tersimpan.', 'success'); closeModal(); await invalidateAfterWrite(cfg.key); renderTab(); }
+=======
+        if (res.success) { toast('Data tersimpan.', 'success'); closeModal(); renderTab(); }
+>>>>>>> 5f42973feb501a493914b033fc6c15a9cc0baf2e
       }, { submitLabel: row ? 'Simpan Perubahan' : 'Simpan' });
     }
   });

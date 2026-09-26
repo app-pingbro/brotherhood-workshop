@@ -13,8 +13,12 @@
 // appear in the "Biaya Bersama" column); recap.pengeluaran.{pingbro,sunrise}
 // holds Pengeluaran, which BROTHERHOOD never carries (PRD CHECK constraint).
 // ============================================================================
+<<<<<<< HEAD
 import { postData } from '../api.js';
 import { fetchSWR, invalidate, invalidatePrefix } from '../cache.js';
+=======
+import { fetchData, postData } from '../api.js';
+>>>>>>> 5f42973feb501a493914b033fc6c15a9cc0baf2e
 import { buildForm } from './_shared.js';
 import { formatCurrency, escapeHtml, skeletonKpis, skeletonTable, toast, openModal, closeModal, confirmDialog, pick } from '../ui.js';
 import { icon } from '../icons.js';
@@ -51,6 +55,7 @@ export async function render(container) {
   }
 
   renderPeriodActions(period);
+<<<<<<< HEAD
   // Independent of recap data (only needs `period`) — render it right away
   // rather than waiting on the recap fetch, and keep it OUT of the recap's
   // stale-while-revalidate callback below so a background refresh never
@@ -73,6 +78,21 @@ export async function render(container) {
       document.getElementById('matrix-section').innerHTML = '';
     }
   }
+=======
+
+  let recap;
+  try {
+    recap = await fetchData('getMonthlyRecap', { period_id: period.id });
+  } catch (e) {
+    document.getElementById('saldo-section').innerHTML = `<div class="notice notice-critical">${icon('alert')} Gagal memuat Rekap Bulanan.</div>`;
+    document.getElementById('matrix-section').innerHTML = '';
+    return;
+  }
+
+  renderSaldo(recap, period);
+  renderMatrix(recap);
+  renderKoreksiForm(period);
+>>>>>>> 5f42973feb501a493914b033fc6c15a9cc0baf2e
 }
 
 function renderPeriodActions(period) {
@@ -101,18 +121,24 @@ async function closePeriodFlow(period) {
   const res = await postData('closePeriod', { period_id: period.id });
   if (res.success) {
     toast('Periode berhasil ditutup dan snapshot Slip Gaji dibuat.', 'success');
+<<<<<<< HEAD
     invalidateRecapCaches(period.id);
     invalidate('getLookups'); // periods[].status changed
+=======
+>>>>>>> 5f42973feb501a493914b033fc6c15a9cc0baf2e
     await refreshPeriodsAndRerender();
   }
 }
 
+<<<<<<< HEAD
 function invalidateRecapCaches(periodId) {
   invalidate('getMonthlyRecap', { period_id: periodId });
   invalidatePrefix('dashRecent');
   invalidatePrefix('dashTrend');
 }
 
+=======
+>>>>>>> 5f42973feb501a493914b033fc6c15a9cc0baf2e
 function openReopenModal(period) {
   openModal({
     title: 'Buka Kembali Periode',
@@ -126,8 +152,11 @@ function openReopenModal(period) {
         const res = await postData('reopenPeriod', { period_id: period.id, reason: values.reason });
         if (res.success) {
           toast('Periode dibuka kembali.', 'success');
+<<<<<<< HEAD
           invalidateRecapCaches(period.id);
           invalidate('getLookups'); // periods[].status changed
+=======
+>>>>>>> 5f42973feb501a493914b033fc6c15a9cc0baf2e
           closeModal();
           await refreshPeriodsAndRerender();
         }
@@ -138,10 +167,14 @@ function openReopenModal(period) {
 
 async function refreshPeriodsAndRerender() {
   try {
+<<<<<<< HEAD
     // Forced + written back into the shared cache (not a bare fetchData())
     // so the sidebar's period selector and every other page that reads
     // getLookups() also see the new status immediately, not after the TTL.
     const lookups = await fetchSWR('getLookups', {}, () => {}, { force: true });
+=======
+    const lookups = await fetchData('getLookups', {});
+>>>>>>> 5f42973feb501a493914b033fc6c15a9cc0baf2e
     setPeriods(lookups.periods || []);
   } catch (e) { /* ignore */ }
   render(document.getElementById('view'));
@@ -237,7 +270,10 @@ function renderKoreksiForm(period) {
     const res = await postData('correctSaldoAwal', { period_id: period.id, koreksi: Number(values.koreksi) || 0, alasan: values.alasan });
     if (res.success) {
       toast('Koreksi Saldo Awal berhasil disimpan.', 'success');
+<<<<<<< HEAD
       invalidateRecapCaches(period.id);
+=======
+>>>>>>> 5f42973feb501a493914b033fc6c15a9cc0baf2e
       render(document.getElementById('view'));
     }
   }, { submitLabel: 'Simpan Koreksi', cancelable: false });

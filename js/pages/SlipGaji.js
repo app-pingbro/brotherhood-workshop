@@ -5,7 +5,11 @@
 // live computation — see BUILD-SPEC's Slip Gaji state machine). Print via
 // window.print() with the print stylesheet in css/style.css.
 // ============================================================================
+<<<<<<< HEAD
 import { fetchSWR, peek } from '../cache.js';
+=======
+import { fetchData } from '../api.js';
+>>>>>>> 5f42973feb501a493914b033fc6c15a9cc0baf2e
 import { formatCurrency, escapeHtml, skeletonKpis, pick } from '../ui.js';
 import { icon } from '../icons.js';
 import { getCurrentPeriod, getLookups } from '../state.js';
@@ -50,6 +54,7 @@ export async function render(container) {
 
 async function loadSlip(period, employeeId) {
   const root = document.getElementById('slip-body');
+<<<<<<< HEAD
   const params = { period_id: period.id, employee_id: employeeId };
   // Instant UX: re-picking a worker already viewed this session paints
   // their slip immediately from cache, then quietly refreshes.
@@ -67,6 +72,17 @@ async function loadSlip(period, employeeId) {
 
 function renderSlip(slip, period, employeeId) {
   const root = document.getElementById('slip-body');
+=======
+  root.innerHTML = skeletonKpis(2);
+  let slip;
+  try {
+    slip = await fetchData('getSalarySlip', { period_id: period.id, employee_id: employeeId });
+  } catch (e) {
+    root.innerHTML = `<div class="notice notice-critical">${icon('alert')} Gagal memuat Slip Gaji.</div>`;
+    return;
+  }
+
+>>>>>>> 5f42973feb501a493914b033fc6c15a9cc0baf2e
   const lk = getLookups();
   const employee = (lk?.employees || []).find((e) => e.id === employeeId);
   const locked = Boolean(pick(slip, ['locked'], false));
