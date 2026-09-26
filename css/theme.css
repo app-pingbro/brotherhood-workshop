@@ -1,0 +1,176 @@
+/* ==========================================================================
+   Brotherhood Workshop Manager — Design Tokens
+   Light theme  = "Brotherhood"     (default)
+   Dark theme   = "Sovereign Slate" (data-theme="dark")
+   Tokens are consumed everywhere via var(--token); never hardcode colors
+   in component CSS. Toggle persists to localStorage key `bw_theme`.
+   ========================================================================== */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Manrope:wght@600;700;800&display=swap');
+
+:root {
+  /* ---- Light "Brotherhood" (default) -------------------------------- */
+  --color-ink: #101010;
+  --color-lime: #C6EF4E;
+  --color-bg: #F6F7F7;
+  --color-surface: #FFFFFF;
+  --color-surface-muted: #EAECDF;
+  --color-elevated: #FFFFFF;
+  --color-orange: #FF8A1E;
+  --color-red: #DC2626;
+  --color-green: #16A34A;
+
+  --color-owner-pingbro: #101010;
+  --color-owner-sunrise: #8B5CF6;
+  --color-owner-brotherhood: #14B8A6;
+
+  --color-text-high: var(--color-ink);
+  --color-text-medium: #52525B;
+  --color-text-low: #8A8F8C;
+
+  --color-border: rgba(16, 16, 16, 0.10);
+  --color-border-strong: rgba(16, 16, 16, 0.18);
+
+  --color-primary: var(--color-ink);
+  --color-on-primary: #FFFFFF;
+  --color-accent: var(--color-lime);
+  --color-on-accent: #101010;
+  --color-secondary: var(--color-orange);
+
+  --status-success-bg: rgba(22, 163, 74, 0.12);
+  --status-success-fg: #16A34A;
+  --status-warning-bg: rgba(255, 138, 30, 0.14);
+  --status-warning-fg: #B15E00;
+  --status-critical-bg: rgba(220, 38, 38, 0.10);
+  --status-critical-fg: #DC2626;
+
+  --shadow-sm: 0 1px 2px rgba(16, 16, 16, 0.06);
+  --shadow-md: 0 6px 20px rgba(16, 16, 16, 0.08);
+  --shadow-lg: 0 16px 40px rgba(16, 16, 16, 0.14);
+
+  --radius-sm: 8px;
+  --radius-lg: 16px;
+
+  --font-display: 'Manrope', 'Atyp Display', 'Inter', sans-serif;
+  --font-body: 'Inter', sans-serif;
+
+  --sidebar-w: 248px;
+  --topbar-h: 64px;
+
+  color-scheme: light;
+}
+
+/* ---- Dark "Sovereign Slate" (system preference, unless overridden) --- */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --color-ink: #F8FAFC;
+    --color-bg: #0B0F17;
+    --color-surface: #111827;
+    --color-surface-muted: #1E293B;
+    --color-elevated: #1E293B;
+
+    --color-primary: #10B981;
+    --color-on-primary: #003824;
+    --color-on-primary-strong: #062E20;
+    --color-accent: #10B981;
+    --color-on-accent: #003824;
+    --color-secondary: #0EA5E9;
+
+    --color-orange: #F59E0B;
+    --color-red: #F87171;
+    --color-green: #34D399;
+
+    --color-owner-pingbro: #F8FAFC;
+    --color-owner-sunrise: #A78BFA;
+    --color-owner-brotherhood: #2DD4BF;
+
+    --color-text-high: #F8FAFC;
+    --color-text-medium: #94A3B8;
+    --color-text-low: #475569;
+
+    --color-border: rgba(148, 163, 184, 0.08);
+    --color-border-strong: rgba(148, 163, 184, 0.16);
+
+    --status-success-bg: rgba(16, 185, 129, 0.12);
+    --status-success-fg: #34D399;
+    --status-warning-bg: rgba(245, 158, 11, 0.14);
+    --status-warning-fg: #FBBF24;
+    --status-critical-bg: rgba(239, 68, 68, 0.12);
+    --status-critical-fg: #F87171;
+
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.30);
+    --shadow-md: 0 6px 20px rgba(0, 0, 0, 0.40);
+    --shadow-lg: 0 20px 48px rgba(0, 0, 0, 0.55);
+
+    --font-display: 'Inter', sans-serif;
+
+    color-scheme: dark;
+  }
+}
+
+/* ---- Dark "Sovereign Slate" (explicit toggle) ------------------------ */
+:root[data-theme="dark"] {
+  --color-ink: #F8FAFC;
+  --color-bg: #0B0F17;
+  --color-surface: #111827;
+  --color-surface-muted: #1E293B;
+  --color-elevated: #1E293B;
+
+  --color-primary: #10B981;
+  --color-on-primary: #003824;
+  --color-on-primary-strong: #062E20;
+  --color-accent: #10B981;
+  --color-on-accent: #003824;
+  --color-secondary: #0EA5E9;
+
+  --color-orange: #F59E0B;
+  --color-red: #F87171;
+  --color-green: #34D399;
+
+  --color-owner-pingbro: #F8FAFC;
+  --color-owner-sunrise: #A78BFA;
+  --color-owner-brotherhood: #2DD4BF;
+
+  --color-text-high: #F8FAFC;
+  --color-text-medium: #94A3B8;
+  --color-text-low: #475569;
+
+  --color-border: rgba(148, 163, 184, 0.08);
+  --color-border-strong: rgba(148, 163, 184, 0.16);
+
+  --status-success-bg: rgba(16, 185, 129, 0.12);
+  --status-success-fg: #34D399;
+  --status-warning-bg: rgba(245, 158, 11, 0.14);
+  --status-warning-fg: #FBBF24;
+  --status-critical-bg: rgba(239, 68, 68, 0.12);
+  --status-critical-fg: #F87171;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.30);
+  --shadow-md: 0 6px 20px rgba(0, 0, 0, 0.40);
+  --shadow-lg: 0 20px 48px rgba(0, 0, 0, 0.55);
+
+  --font-display: 'Inter', sans-serif;
+
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  background: var(--color-bg);
+  color: var(--color-text-high);
+}
+
+body {
+  font-family: var(--font-body);
+  font-variant-numeric: tabular-nums;
+}
+
+.num, .currency, td.num, th.num {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+}
