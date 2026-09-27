@@ -144,7 +144,7 @@ function openCreatePeriodForm() {
       buildForm(formBody.querySelector('#period-form-root'), [
         { key: 'month', label: 'Bulan', type: 'select', required: true,
           options: () => MONTHS_ID.map((name, i) => ({ value: String(i + 1), label: name })) },
-        { key: 'year', label: 'Tahun', type: 'number', required: true, min: 2000 }
+        { key: 'year', label: 'Tahun', type: 'number', required: true, min: 2000, noGroup: true }
       ], values, getLookups(), async (finalValues) => {
         const month = Number(finalValues.month);
         const year = Number(finalValues.year);
