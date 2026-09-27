@@ -19,7 +19,7 @@ import { fetchSWR, peek, invalidate } from '../cache.js';
 import { buildForm } from './_shared.js';
 import {
   formatCurrency, escapeHtml, badge, skeletonTable, emptyState, toast,
-  openModal, closeModal, confirmDialog
+  openModal, closeModal, confirmDialog, MONTHS_ID, formatPeriodLabel
 } from '../ui.js';
 import { icon } from '../icons.js';
 import { getLookups, setLookups } from '../state.js';
@@ -36,11 +36,6 @@ const TABS = [
   { key: 'users', label: 'Pengguna' },
   { key: 'periods', label: 'Periode' },
   { key: 'settings', label: 'Pengaturan' }
-];
-
-const MONTHS_ID = [
-  'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni',
-  'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'
 ];
 
 const LOGO_ALLOWED_TYPES = ['image/png', 'image/jpeg', 'image/webp'];
@@ -129,7 +124,7 @@ function renderPeriodList() {
       const isClosed = String(p.status).toUpperCase() === 'CLOSED';
       return `
       <tr data-period-id="${escapeHtml(p.id)}">
-        <td>${escapeHtml(p.label || (MONTHS_ID[Number(p.month) - 1] || p.month) + ' ' + p.year)}</td>
+        <td>${escapeHtml(formatPeriodLabel(p))}</td>
         <td>${badge(isClosed ? 'Closed' : 'Open', isClosed ? 'neutral' : 'success')}</td>
         <td class="row-actions">
           <button class="btn btn-outline btn-sm btn-icon" data-act="edit-period" title="${isClosed ? 'Buka kembali periode ini dari Rekap Bulanan untuk mengedit' : 'Edit'}" ${isClosed ? 'disabled' : ''}>${icon('edit', 15)}</button>

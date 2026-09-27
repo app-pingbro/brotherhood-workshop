@@ -16,7 +16,7 @@
 import { postData } from '../api.js';
 import { fetchSWR, invalidate, invalidatePrefix } from '../cache.js';
 import { buildForm } from './_shared.js';
-import { formatCurrency, escapeHtml, skeletonKpis, skeletonTable, toast, openModal, closeModal, confirmDialog, pick } from '../ui.js';
+import { formatCurrency, escapeHtml, skeletonKpis, skeletonTable, toast, openModal, closeModal, confirmDialog, pick, formatPeriodLabel } from '../ui.js';
 import { icon } from '../icons.js';
 import { getCurrentPeriod, setPeriods } from '../state.js';
 
@@ -32,7 +32,7 @@ export async function render(container) {
   const period = getCurrentPeriod();
   container.innerHTML = `
     <div class="page-header">
-      <div><h1>Rekap Bulanan</h1><div class="subtitle">${period ? escapeHtml(period.label || '') : 'Pilih periode di kanan atas'}</div></div>
+      <div><h1>Rekap Bulanan</h1><div class="subtitle">${period ? escapeHtml(formatPeriodLabel(period)) : 'Pilih periode di kanan atas'}</div></div>
       <div class="page-header__actions" id="period-actions"></div>
     </div>
     <div id="saldo-section">${skeletonKpis(3)}</div>
@@ -94,7 +94,7 @@ function renderPeriodActions(period) {
 
 async function closePeriodFlow(period) {
   const ok = await confirmDialog(
-    `Tutup periode "${period.label}"? Sistem akan membuat snapshot Slip Gaji untuk semua pekerja yang memiliki aktivitas pada periode ini, dan transaksi akan terkunci.`,
+    `Tutup periode "${formatPeriodLabel(period)}"? Sistem akan membuat snapshot Slip Gaji untuk semua pekerja yang memiliki aktivitas pada periode ini, dan transaksi akan terkunci.`,
     { confirmLabel: 'Tutup Periode', tone: 'danger' }
   );
   if (!ok) return;

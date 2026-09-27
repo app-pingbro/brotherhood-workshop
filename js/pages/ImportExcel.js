@@ -19,7 +19,7 @@
 // ============================================================================
 import { fetchData, postData } from '../api.js';
 import { invalidate, invalidatePrefix } from '../cache.js';
-import { formatCurrency, escapeHtml, toast, badge } from '../ui.js';
+import { formatCurrency, escapeHtml, toast, badge, formatPeriodLabel } from '../ui.js';
 import { icon } from '../icons.js';
 import { getCurrentPeriod, getLookups } from '../state.js';
 import { ownerOptions } from '../lookups.js';
@@ -249,7 +249,7 @@ function renderStep1(root) {
     <div class="form-grid">
       <div class="field">
         <label>Periode</label>
-        <div class="field-computed">${escapeHtml(period ? period.label : 'Belum dipilih')}</div>
+        <div class="field-computed">${escapeHtml(period ? formatPeriodLabel(period) : 'Belum dipilih')}</div>
         <div class="hint">Gunakan selector periode di kanan atas untuk mengganti.</div>
       </div>
       <div class="field">

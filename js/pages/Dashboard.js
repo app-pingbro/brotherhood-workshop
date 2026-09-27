@@ -11,7 +11,7 @@
 // ============================================================================
 import { fetchData } from '../api.js';
 import { fetchSWR, swr } from '../cache.js';
-import { formatCurrency, skeletonKpis, skeletonTable, emptyState, escapeHtml, pick, badge } from '../ui.js';
+import { formatCurrency, skeletonKpis, skeletonTable, emptyState, escapeHtml, pick, badge, formatPeriodLabel } from '../ui.js';
 import { icon } from '../icons.js';
 import { getState, getCurrentPeriod, getOwnerFilter, getLookups } from '../state.js';
 import { ownerIdByCode, ownerName, nameById } from '../lookups.js';
@@ -21,7 +21,7 @@ export async function render(container) {
   const period = getCurrentPeriod();
   container.innerHTML = `
     <div class="page-header">
-      <div><h1>Dashboard</h1><div class="subtitle">${period ? escapeHtml(period.label || '') : 'Pilih periode di kanan atas'}</div></div>
+      <div><h1>Dashboard</h1><div class="subtitle">${period ? escapeHtml(formatPeriodLabel(period)) : 'Pilih periode di kanan atas'}</div></div>
     </div>
     <div id="dash-kpis">${skeletonKpis(3)}</div>
     <div class="grid grid-2 mt-16">
@@ -205,7 +205,7 @@ async function loadTrend(period) {
     fetchData('getMonthlyRecap', { period_id: p.id }).catch(() => null)
   ));
   return windowPeriods.map((p, i) => ({
-    label: p.label || `${p.month}/${p.year}`,
+    label: formatPeriodLabel(p),
     value: pick(results[i], ['hasilBulan', 'hasil_bulan'], 0)
   }));
 }

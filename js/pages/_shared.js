@@ -10,7 +10,7 @@ import { fetchSWR, peek, invalidate, invalidatePrefix } from '../cache.js';
 import { icon } from '../icons.js';
 import {
   formatCurrency, formatDate, skeletonTable, emptyState, escapeHtml,
-  openModal, closeModal, confirmDialog, toast, setModalDirtyCheck
+  openModal, closeModal, confirmDialog, toast, setModalDirtyCheck, formatPeriodLabel
 } from '../ui.js';
 import { getState, getCurrentPeriod, getOwnerFilter, getLookups } from '../state.js';
 
@@ -58,7 +58,7 @@ export async function renderCrudPage(container, opts) {
     document.getElementById('crud-lock').innerHTML = `${icon('alert')} Pilih periode terlebih dahulu di bagian atas untuk melihat dan menambah data.`;
   } else if (isClosed && opts.periodRequired !== false) {
     document.getElementById('crud-lock').style.display = 'flex';
-    document.getElementById('crud-lock').innerHTML = `${icon('lock')} Periode <strong>${escapeHtml(period.label || '')}</strong> berstatus <strong>CLOSED</strong> &mdash; data hanya bisa dilihat. Buka kembali periode ini dari Rekap Bulanan untuk mengedit.`;
+    document.getElementById('crud-lock').innerHTML = `${icon('lock')} Periode <strong>${escapeHtml(formatPeriodLabel(period))}</strong> berstatus <strong>CLOSED</strong> &mdash; data hanya bisa dilihat. Buka kembali periode ini dari Rekap Bulanan untuk mengedit.`;
   }
 
   // Header action(s)

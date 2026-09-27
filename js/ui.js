@@ -33,6 +33,44 @@ export function formatDate(d) {
   return date.toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' });
 }
 
+// Indonesian month names — the single copy used everywhere a Period's month
+// needs a name (the Periode create/edit form's Bulan dropdown, and
+// formatPeriodLabel below). Previously duplicated as a module-private array
+// inside pages/MasterData.js; centralized here so there is exactly one list
+// to keep in sync.
+export const MONTHS_ID = [
+  'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni',
+  'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'
+];
+
+/**
+ * The one place a Period's display name is computed, used by every page
+ * that shows a period (topbar selector, page subtitles, Periode list,
+ * Import Excel wizard, closed-period banners, confirm dialogs, dashboard
+ * trend labels...). Always derives "[Nama Bulan] [Tahun]" from the period's
+ * `month`/`year` fields — NOT from its `label` field.
+ *
+ * Why: `label` is stored as clean text ("September 2026") when a period is
+ * created/edited, but Google Sheets can silently re-type a text cell that
+ * looks like a date into an actual Date cell even when it was written
+ * through the API as a string. When that happens, reading the sheet back
+ * returns a JS Date object for that cell, which serializes to an ISO
+ * string like "2026-08-31T16:00:00.000Z" — exactly the corrupted value
+ * this function exists to never show. `month`/`year` are plain integers
+ * and are not subject to this — deriving the display from them entirely
+ * sidesteps the corruption instead of trying to detect/repair it, and
+ * requires no change to what's actually stored in the sheet.
+ */
+export function formatPeriodLabel(period) {
+  if (!period) return '';
+  const m = Number(period.month);
+  const y = Number(period.year);
+  if (m >= 1 && m <= 12 && y) return `${MONTHS_ID[m - 1]} ${y}`;
+  // Only reached if month/year are themselves missing/invalid — falls back
+  // to whatever label is available rather than showing nothing.
+  return period.label || '-';
+}
+
 export function formatDateTime(d) {
   if (!d) return '-';
   const date = new Date(d);

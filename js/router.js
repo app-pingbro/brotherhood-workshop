@@ -14,7 +14,7 @@ import {
 } from './state.js';
 import { isAuthenticated, requireAuth, logout } from './auth.js';
 import { toggleTheme, currentTheme } from './theme.js';
-import { toast } from './ui.js';
+import { toast, formatPeriodLabel } from './ui.js';
 
 import * as LoginPage from './pages/Login.js';
 import * as DashboardPage from './pages/Dashboard.js';
@@ -302,7 +302,7 @@ function renderPeriodSelect() {
     .slice()
     .sort((a, b) => (a.year - b.year) || (a.month - b.month))
     .reverse()
-    .map((p) => `<option value="${p.id}"${p.id === state.currentPeriodId ? ' selected' : ''}>${p.label || (p.month + '/' + p.year)}${(p.status || '').toLowerCase() === 'closed' ? ' \u{1F512}' : ''}</option>`)
+    .map((p) => `<option value="${p.id}"${p.id === state.currentPeriodId ? ' selected' : ''}>${formatPeriodLabel(p)}${(p.status || '').toLowerCase() === 'closed' ? ' \u{1F512}' : ''}</option>`)
     .join('');
 }
 

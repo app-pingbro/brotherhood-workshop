@@ -6,7 +6,7 @@
 // window.print() with the print stylesheet in css/style.css.
 // ============================================================================
 import { fetchSWR, peek } from '../cache.js';
-import { formatCurrency, escapeHtml, skeletonKpis, pick } from '../ui.js';
+import { formatCurrency, escapeHtml, skeletonKpis, pick, formatPeriodLabel } from '../ui.js';
 import { icon } from '../icons.js';
 import { getCurrentPeriod, getLookups } from '../state.js';
 import { toOptions } from '../lookups.js';
@@ -17,7 +17,7 @@ export async function render(container) {
   const period = getCurrentPeriod();
   container.innerHTML = `
     <div class="page-header no-print">
-      <div><h1>Slip Gaji</h1><div class="subtitle">${period ? escapeHtml(period.label || '') : 'Pilih periode di kanan atas'}</div></div>
+      <div><h1>Slip Gaji</h1><div class="subtitle">${period ? escapeHtml(formatPeriodLabel(period)) : 'Pilih periode di kanan atas'}</div></div>
     </div>
     <div class="card mb-16 no-print">
       <div class="form-grid">
@@ -94,7 +94,7 @@ function renderSlip(slip, period, employeeId) {
         <div class="flex-between no-print">
           <div>
             <h3>${escapeHtml(employee ? employee.name : '-')}</h3>
-            <div class="subtitle">${escapeHtml(period.label || '')} &middot; ${locked ? 'Terkunci (Snapshot)' : 'Live'}</div>
+            <div class="subtitle">${escapeHtml(formatPeriodLabel(period))} &middot; ${locked ? 'Terkunci (Snapshot)' : 'Live'}</div>
           </div>
           <div class="flex gap-8">
             <button class="btn btn-secondary btn-sm" id="slip-print">${icon('print', 15)} Cetak / Ekspor</button>
