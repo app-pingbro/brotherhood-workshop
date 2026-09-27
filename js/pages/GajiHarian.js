@@ -10,6 +10,7 @@ import { formatCurrency, escapeHtml, badge } from '../ui.js';
 import { getCurrentPeriod, getLookups } from '../state.js';
 import { byId, nameById, toOptions } from '../lookups.js';
 import { previewGajiHarian, previewLembur, resolveTarif } from '../pricing.js';
+import { buildImportExcelHeaderButtons } from './ImportExcel.js';
 
 function getSetting(lookups, key, fallback = 0) {
   const row = (lookups?.settings || []).find((s) => s.key === key);
@@ -21,11 +22,16 @@ export async function render(container) {
   container.innerHTML = `
     <div class="page-header">
       <div><h1>Gaji Harian &amp; Lembur</h1><div class="subtitle">Gaji Harian/Minggu dan Lembur per pekerja untuk periode berjalan.</div></div>
+      <div class="page-header__actions" id="gaji-harian-actions"></div>
     </div>
     <div id="section-daily"></div>
     <div class="mt-20"></div>
     <div id="section-overtime"></div>
   `;
+  // One entry point for both sections on this page — the wizard's own
+  // Modul dropdown lets the user pick "Gaji Harian" or "Lembur" (both are
+  // Penggajian modules, just pre-selecting the one this page defaults to).
+  document.getElementById('gaji-harian-actions').appendChild(buildImportExcelHeaderButtons('gaji_harian'));
 
   await renderCrudPage(document.getElementById('section-daily'), {
     title: 'Gaji Harian & Minggu',

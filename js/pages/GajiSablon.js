@@ -10,12 +10,14 @@ import { getCurrentPeriod, getLookups } from '../state.js';
 import { activeOnly, nameById, toOptions } from '../lookups.js';
 import { PRICE_CATEGORY } from '../config.js';
 import { previewSablon } from '../pricing.js';
+import { buildImportExcelHeaderButtons } from './ImportExcel.js';
 
 export async function render(container) {
   const period = getCurrentPeriod();
   await renderCrudPage(container, {
     title: 'Gaji Sablon',
     subtitle: 'Pembayaran Borongan Sablon per pekerja. Harga selalu dari Master Harga global — tidak ada override per-pekerja.',
+    headerExtra: buildImportExcelHeaderButtons('gaji_sablon'),
     listAction: 'getPrintingWorkerPayments',
     listParams: () => ({ period_id: period?.id }),
     localFilters: [

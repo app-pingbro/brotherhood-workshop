@@ -124,14 +124,27 @@ function renderPeriodList() {
     .sort((a, b) => (b.year - a.year) || (b.month - a.month));
   if (!periods.length) { root.innerHTML = emptyState('Belum ada Periode', 'Buat periode baru dengan tombol di atas.'); return; }
   root.innerHTML = `<div class="table-wrap"><table class="data-table">
-    <thead><tr><th>Periode</th><th>Status</th></tr></thead>
-    <tbody>${periods.map((p) => `
-      <tr>
+    <thead><tr><th>Periode</th><th>Status</th><th class="num">Aksi</th></tr></thead>
+    <tbody>${periods.map((p) => {
+      const isClosed = String(p.status).toUpperCase() === 'CLOSED';
+      return `
+      <tr data-period-id="${escapeHtml(p.id)}">
         <td>${escapeHtml(p.label || (MONTHS_ID[Number(p.month) - 1] || p.month) + ' ' + p.year)}</td>
-        <td>${badge(String(p.status).toUpperCase() === 'CLOSED' ? 'Closed' : 'Open', String(p.status).toUpperCase() === 'CLOSED' ? 'neutral' : 'success')}</td>
-      </tr>`).join('')}
+        <td>${badge(isClosed ? 'Closed' : 'Open', isClosed ? 'neutral' : 'success')}</td>
+        <td class="row-actions">
+          <button class="btn btn-outline btn-sm btn-icon" data-act="edit-period" title="${isClosed ? 'Buka kembali periode ini dari Rekap Bulanan untuk mengedit' : 'Edit'}" ${isClosed ? 'disabled' : ''}>${icon('edit', 15)}</button>
+        </td>
+      </tr>`;
+    }).join('')}
     </tbody>
   </table></div>`;
+  root.querySelectorAll('[data-act="edit-period"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const tr = btn.closest('tr');
+      const period = periods.find((p) => String(p.id) === tr.dataset.periodId);
+      if (period) openEditPeriodForm(period);
+    });
+  });
 }
 
 function openCreatePeriodForm() {
@@ -162,6 +175,45 @@ function openCreatePeriodForm() {
           renderPeriodList();
         }
       }, { submitLabel: 'Buat Periode' });
+    }
+  });
+}
+
+// Edit Periode — same fields/validation/save mechanism as "Buat Periode
+// Baru" above (identical field config, same buildForm engine, same
+// createPeriod-style duplicate check server-side via updatePeriod), just
+// pre-filled with the period's current month/year and sent with its id.
+// Never touches status (Close/Reopen on Rekap Bulanan stay the only way to
+// change that) or any transaction/payroll data — those only reference
+// period_id, never a copy of month/year/label.
+function openEditPeriodForm(period) {
+  const values = { month: String(period.month), year: String(period.year) };
+  openModal({
+    title: 'Edit Periode',
+    bodyHtml: '<div id="period-form-root"></div>',
+    onMount: (formBody) => {
+      buildForm(formBody.querySelector('#period-form-root'), [
+        { key: 'month', label: 'Bulan', type: 'select', required: true,
+          options: () => MONTHS_ID.map((name, i) => ({ value: String(i + 1), label: name })) },
+        { key: 'year', label: 'Tahun', type: 'number', required: true, min: 2000, noGroup: true }
+      ], values, getLookups(), async (finalValues) => {
+        const month = Number(finalValues.month);
+        const year = Number(finalValues.year);
+        const label = `${MONTHS_ID[month - 1]} ${year}`;
+        // Duplicate check (against every OTHER period) + the OPEN/CLOSED
+        // guard are enforced server-side (Periods.gs api_updatePeriod),
+        // reusing the exact same checks createPeriod already uses — not
+        // reimplemented here. On a duplicate or a CLOSED period, postData's
+        // centralized error toast shows the backend's message and this
+        // callback does nothing further, leaving the modal open to correct it.
+        const res = await postData('updatePeriod', { period_id: period.id, month, year, label });
+        if (res.success) {
+          toast('Periode berhasil diperbarui.', 'success');
+          closeModal();
+          await refreshLookupsCache();
+          renderPeriodList();
+        }
+      }, { submitLabel: 'Simpan Perubahan' });
     }
   });
 }
