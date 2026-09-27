@@ -10,7 +10,7 @@ import { fetchSWR, peek, invalidate, invalidatePrefix } from '../cache.js';
 import { icon } from '../icons.js';
 import {
   formatCurrency, formatDate, skeletonTable, emptyState, escapeHtml,
-  openModal, closeModal, confirmDialog, toast, setModalDirtyCheck
+  openModal, closeModal, confirmDialog, toast
 } from '../ui.js';
 import { getState, getCurrentPeriod, getOwnerFilter, getLookups } from '../state.js';
 
@@ -240,18 +240,6 @@ export async function renderCrudPage(container, opts) {
 export function buildForm(root, fields, values, lookups, onSubmit, { mode = 'add', submitLabel = 'Simpan', cancelable = true } = {}) {
   function fieldVisible(f) { return f.showIf ? f.showIf(values) : true; }
 
-  // Data-safety (requirement: "form tidak reset ketika klik di luar"): a
-  // snapshot of the values this form started with, so the modal can ask
-  // for confirmation instead of silently discarding an in-progress edit on
-  // an accidental backdrop/✕/Escape dismiss. See ui.js setModalDirtyCheck.
-  const initialSnapshot = JSON.stringify(values);
-  function isDirty() { return JSON.stringify(values) !== initialSnapshot; }
-
-  // Double-submit guard: lives at buildForm's scope (not inside wire()) so
-  // it survives the form being re-rendered by recomputeAndMaybeRerender
-  // (conditional fields) while a save is still in flight.
-  let submitting = false;
-
   function renderFields() {
     root.innerHTML = `<form novalidate>
       <div class="form-grid">
@@ -271,24 +259,7 @@ export function buildForm(root, fields, values, lookups, onSubmit, { mode = 'add
       const input = form.querySelector(`[name="${f.key}"]`);
       if (!input || f.type === 'static') return;
       input.addEventListener('input', () => {
-        if (f.type === 'number') {
-          // Masked numeric text input (no native spinner — see
-          // renderFieldHtml): sanitize keystrokes to digits (+ optional
-          // leading "-") only, strip leading zeros ("0007" -> "7"), and
-          // live-format with "." thousands separators for display, while
-          // `values[f.key]` keeps the plain unformatted digit string that
-          // every buildPayload()/validateAll() already expects — no API
-          // contract change.
-          const digits = sanitizeNumberDigits(input.value);
-          const display = f.noGroup ? digits : groupThousands(digits);
-          const tailLen = input.value.length - (input.selectionStart ?? input.value.length);
-          input.value = display;
-          const caret = Math.max(0, display.length - tailLen);
-          try { input.setSelectionRange(caret, caret); } catch (e) { /* not all input types support this */ }
-          values[f.key] = digits;
-        } else {
-          values[f.key] = input.value;
-        }
+        values[f.key] = input.value;
         if (f.onChange) f.onChange(values, lookups);
         recomputeAndMaybeRerender(f);
       });
@@ -301,22 +272,10 @@ export function buildForm(root, fields, values, lookups, onSubmit, { mode = 'add
       }
     });
     if (cancelable) form.querySelector('[data-cancel]')?.addEventListener('click', () => closeModal());
-    form.addEventListener('submit', async (e) => {
+    form.addEventListener('submit', (e) => {
       e.preventDefault();
-      if (submitting) return; // guards a double-click / double Enter-press
       if (!validateAll()) return;
-      submitting = true;
-      const submitBtn = form.querySelector('[type="submit"]');
-      const originalLabel = submitBtn ? submitBtn.textContent : '';
-      if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = 'Menyimpan...'; }
-      try {
-        await onSubmit(values);
-      } finally {
-        submitting = false;
-        // If onSubmit succeeded it already called closeModal() — these are
-        // then harmless no-ops on a detached button.
-        if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = originalLabel; }
-      }
+      onSubmit(values);
     });
   }
 
@@ -353,36 +312,6 @@ export function buildForm(root, fields, values, lookups, onSubmit, { mode = 'add
   }
 
   renderFields();
-  setModalDirtyCheck(isDirty);
-}
-
-// ---------------------------------------------------------------------------
-// Numeric field masking helpers (requirement: no browser number-spinner,
-// Indonesian "." thousands grouping, never a leading-zero artifact like
-// "0007"). `noGroup` opts a field out of the "." grouping only — used by
-// MasterData.js's Tahun (year) field, where "2.026" would be wrong; the
-// digit-only sanitizing (no spinner, no stray leading zero) still applies.
-// ---------------------------------------------------------------------------
-function sanitizeNumberDigits(raw) {
-  const str = String(raw ?? '');
-  const negative = str.trim().charAt(0) === '-';
-  let digits = str.replace(/[^\d]/g, '');
-  digits = digits.replace(/^0+(?=\d)/, ''); // "0007" -> "7", but a lone "0" stays "0"
-  return negative && digits ? '-' + digits : digits;
-}
-
-function groupThousands(signed) {
-  if (!signed) return '';
-  const negative = signed.charAt(0) === '-';
-  const digits = negative ? signed.slice(1) : signed;
-  if (!digits) return negative ? '-' : '';
-  const grouped = digits.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
-  return negative ? '-' + grouped : grouped;
-}
-
-function formatNumberDisplay(rawValue, noGroup) {
-  const digits = sanitizeNumberDigits(rawValue);
-  return noGroup ? digits : groupThousands(digits);
 }
 
 function renderFieldHtml(f, values, lookups) {
@@ -404,16 +333,8 @@ function renderFieldHtml(f, values, lookups) {
     control = `<div class="field-computed">${f.render(values, lookups)}</div>`;
   } else if (f.type === 'date') {
     control = `<input class="input" type="date" name="${f.key}" value="${escapeHtml(val ?? '')}" />`;
-  } else if (f.type === 'number') {
-    // Rendered as a masked text input, not <input type="number"> — removes
-    // the native up/down spinner and lets us fully control formatting
-    // (Indonesian "." thousands grouping, no leading zeros) while keeping
-    // `values[f.key]` a plain digit string underneath (wire() below).
-    // f.min is still enforced in validateAll(); it's just not a native
-    // HTML attribute anymore since this isn't a number input.
-    control = `<input class="input" type="text" inputmode="decimal" name="${f.key}" value="${escapeHtml(formatNumberDisplay(val, f.noGroup))}" placeholder="${escapeHtml(f.placeholder || '')}" />`;
   } else {
-    control = `<input class="input" type="${f.type || 'text'}" name="${f.key}" value="${escapeHtml(val ?? '')}" placeholder="${escapeHtml(f.placeholder || '')}" />`;
+    control = `<input class="input" type="${f.type || 'text'}" name="${f.key}" value="${escapeHtml(val ?? '')}" ${f.min !== undefined ? `min="${f.min}"` : ''} placeholder="${escapeHtml(f.placeholder || '')}" />`;
   }
   return `<div class="field${f.span2 ? '' : ''}" data-field-wrap="${f.key}" style="${f.fullWidth ? 'grid-column:1/-1' : ''}">
     <label>${escapeHtml(f.label)} ${required}</label>

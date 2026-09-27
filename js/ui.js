@@ -84,23 +84,14 @@ export function badge(text, tone = 'neutral') {
 }
 
 // ---- Modal ---------------------------------------------------------------
-// Instant UX / data-safety: a form opened in a modal must never silently
-// lose what the user typed. A mounted form registers a "dirty" check via
-// setModalDirtyCheck(); an accidental dismiss (backdrop click, ✕, Escape)
-// then asks for confirmation instead of closing immediately. A deliberate
-// close (the form's own "Batal" button, or a successful save calling
-// closeModal() directly) is unaffected — only the three accidental paths
-// go through requestClose().
 let modalRoot = null;
-let dirtyCheck = null;
-
 export function openModal({ title, bodyHtml, onMount, size }) {
   closeModal();
-  modalRoot = el('div', { class: 'modal-backdrop', onclick: (e) => { if (e.target === modalRoot) requestClose(); } }, [
+  modalRoot = el('div', { class: 'modal-backdrop', onclick: (e) => { if (e.target === modalRoot) closeModal(); } }, [
     el('div', { class: 'modal', style: size === 'lg' ? 'max-width:820px' : '' }, [
       el('div', { class: 'modal__header' }, [
         el('h3', {}, title),
-        el('button', { class: 'modal__close', 'aria-label': 'Tutup', onclick: () => requestClose() }, '✕')
+        el('button', { class: 'modal__close', 'aria-label': 'Tutup', onclick: () => closeModal() }, '✕')
       ]),
       el('div', { class: 'modal__body', html: bodyHtml || '' })
     ])
@@ -109,46 +100,8 @@ export function openModal({ title, bodyHtml, onMount, size }) {
   if (onMount) onMount(modalRoot.querySelector('.modal__body'));
   document.addEventListener('keydown', escHandler);
 }
-
-/**
- * Registered by a mounted form (see _shared.js buildForm) with a function
- * that returns true while the form has unsaved changes. Cleared whenever a
- * modal opens/closes so a stale check never leaks into the next modal.
- */
-export function setModalDirtyCheck(fn) {
-  dirtyCheck = typeof fn === 'function' ? fn : null;
-}
-
-function requestClose() {
-  if (dirtyCheck && dirtyCheck()) {
-    showModalCloseConfirm();
-    return;
-  }
-  closeModal();
-}
-
-// A small overlay layered on top of the still-open modal (not a second
-// openModal() call) so the form underneath is never removed/re-rendered —
-// its DOM and in-progress values stay exactly as the user left them if they
-// choose "Tetap Mengisi".
-function showModalCloseConfirm() {
-  if (!modalRoot || modalRoot.querySelector('.modal-close-confirm')) return;
-  const overlay = el('div', { class: 'modal-close-confirm' }, [
-    el('div', { class: 'modal-close-confirm__box' }, [
-      el('p', {}, 'Data yang Anda masukkan belum disimpan. Yakin ingin keluar?'),
-      el('div', { class: 'form-actions' }, [
-        el('button', { class: 'btn btn-secondary', onclick: () => overlay.remove() }, 'Tetap Mengisi'),
-        el('button', { class: 'btn btn-danger', onclick: () => closeModal() }, 'Keluar')
-      ])
-    ])
-  ]);
-  modalRoot.appendChild(overlay);
-}
-
-function escHandler(e) { if (e.key === 'Escape') requestClose(); }
-
+function escHandler(e) { if (e.key === 'Escape') closeModal(); }
 export function closeModal() {
-  dirtyCheck = null;
   if (modalRoot) { modalRoot.remove(); modalRoot = null; }
   document.removeEventListener('keydown', escHandler);
 }
