@@ -9,7 +9,8 @@ import { fetchData } from './api.js';
 import { fetchSWR, invalidate } from './cache.js';
 import {
   getState, onStateChange, getToken, getUser, setLookups, getLookups,
-  getCurrentPeriod, setCurrentPeriodId, getOwnerFilter, setOwnerFilter
+  getCurrentPeriod, setCurrentPeriodId, getOwnerFilter, setOwnerFilter,
+  getCompanyLogoUrl
 } from './state.js';
 import { isAuthenticated, requireAuth, logout } from './auth.js';
 import { toggleTheme, currentTheme } from './theme.js';
@@ -243,6 +244,9 @@ function buildShell() {
   themeBtn.innerHTML = currentTheme() === 'dark' ? '☀' : '\u{1F319}';
   themeBtn.addEventListener('click', () => toggleTheme());
 
+  // Company logo (falls back to the "BW" text mark until/unless one is set)
+  updateBrandLogo();
+
   // User chip
   updateUserChip();
   document.getElementById('logout-btn').addEventListener('click', async () => {
@@ -254,6 +258,18 @@ function buildShell() {
   document.getElementById('sidebar-backdrop').addEventListener('click', closeSidebar);
 
   shellBuilt = true;
+}
+
+// Instant UX: no dedicated fetch — reads the already-cached getLookups()
+// payload (see state.js getCompanyLogoUrl()). Re-runs whenever 'lookups'
+// changes (initial load, TTL refresh, or right after a logo upload via
+// Master Data → Pengaturan → Informasi Perusahaan), so the sidebar mark
+// updates immediately with no page reload.
+function updateBrandLogo() {
+  const mark = document.querySelector('.sidebar__brand-mark');
+  if (!mark) return;
+  const url = getCompanyLogoUrl();
+  mark.innerHTML = url ? `<img src="${url}" alt="Logo perusahaan" />` : 'BW';
 }
 
 function updateUserChip() {
@@ -292,6 +308,7 @@ function renderPeriodSelect() {
 
 onStateChange((key) => {
   if (key === 'periods' || key === 'lookups') renderPeriodSelect();
+  if (key === 'lookups') updateBrandLogo();
 });
 
 // ---------------------------------------------------------------------------
