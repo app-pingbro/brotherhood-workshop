@@ -104,3 +104,22 @@ export function setLookups(lookups) {
 export function getLookups() {
   return state.lookups;
 }
+
+// ---- Company logo --------------------------------------------------------
+// Logo reference lives as a single row inside lookups.settings (key
+// 'company_logo', value = JSON {fileId,fileName,mimeType,url,updatedAt}) —
+// same generic Settings storage every other setting already uses, so this
+// rides the existing getLookups() cache/SWR/sessionStorage machinery with
+// no dedicated fetch of its own.
+export function getCompanyLogoUrl() {
+  const rows = state.lookups && state.lookups.settings;
+  if (!Array.isArray(rows)) return null;
+  const row = rows.find((r) => r.key === 'company_logo');
+  if (!row || !row.value) return null;
+  try {
+    const ref = JSON.parse(row.value);
+    return (ref && ref.url) || null;
+  } catch (e) {
+    return null;
+  }
+}

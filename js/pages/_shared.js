@@ -10,7 +10,7 @@ import { fetchSWR, peek, invalidate, invalidatePrefix } from '../cache.js';
 import { icon } from '../icons.js';
 import {
   formatCurrency, formatDate, skeletonTable, emptyState, escapeHtml,
-  openModal, closeModal, confirmDialog, toast
+  openModal, closeModal, confirmDialog, toast, setModalDirtyCheck
 } from '../ui.js';
 import { getState, getCurrentPeriod, getOwnerFilter, getLookups } from '../state.js';
 
@@ -240,6 +240,18 @@ export async function renderCrudPage(container, opts) {
 export function buildForm(root, fields, values, lookups, onSubmit, { mode = 'add', submitLabel = 'Simpan', cancelable = true } = {}) {
   function fieldVisible(f) { return f.showIf ? f.showIf(values) : true; }
 
+  // Data-safety (requirement: "form tidak reset ketika klik di luar"): a
+  // snapshot of the values this form started with, so the modal can ask
+  // for confirmation instead of silently discarding an in-progress edit on
+  // an accidental backdrop/✕/Escape dismiss. See ui.js setModalDirtyCheck.
+  const initialSnapshot = JSON.stringify(values);
+  function isDirty() { return JSON.stringify(values) !== initialSnapshot; }
+
+  // Double-submit guard: lives at buildForm's scope (not inside wire()) so
+  // it survives the form being re-rendered by recomputeAndMaybeRerender
+  // (conditional fields) while a save is still in flight.
+  let submitting = false;
+
   function renderFields() {
     root.innerHTML = `<form novalidate>
       <div class="form-grid">
@@ -259,7 +271,24 @@ export function buildForm(root, fields, values, lookups, onSubmit, { mode = 'add
       const input = form.querySelector(`[name="${f.key}"]`);
       if (!input || f.type === 'static') return;
       input.addEventListener('input', () => {
-        values[f.key] = input.value;
+        if (f.type === 'number') {
+          // Masked numeric text input (no native spinner — see
+          // renderFieldHtml): sanitize keystrokes to digits (+ optional
+          // leading "-") only, strip leading zeros ("0007" -> "7"), and
+          // live-format with "." thousands separators for display, while
+          // `values[f.key]` keeps the plain unformatted digit string that
+          // every buildPayload()/validateAll() already expects — no API
+          // contract change.
+          const digits = sanitizeNumberDigits(input.value);
+          const display = f.noGroup ? digits : groupThousands(digits);
+          const tailLen = input.value.length - (input.selectionStart ?? input.value.length);
+          input.value = display;
+          const caret = Math.max(0, display.length - tailLen);
+          try { input.setSelectionRange(caret, caret); } catch (e) { /* not all input types support this */ }
+          values[f.key] = digits;
+        } else {
+          values[f.key] = input.value;
+        }
         if (f.onChange) f.onChange(values, lookups);
         recomputeAndMaybeRerender(f);
       });
@@ -272,21 +301,50 @@ export function buildForm(root, fields, values, lookups, onSubmit, { mode = 'add
       }
     });
     if (cancelable) form.querySelector('[data-cancel]')?.addEventListener('click', () => closeModal());
-    form.addEventListener('submit', (e) => {
+    form.addEventListener('submit', async (e) => {
       e.preventDefault();
+      if (submitting) return; // guards a double-click / double Enter-press
       if (!validateAll()) return;
-      onSubmit(values);
+      submitting = true;
+      const submitBtn = form.querySelector('[type="submit"]');
+      const originalLabel = submitBtn ? submitBtn.textContent : '';
+      if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = 'Menyimpan...'; }
+      try {
+        await onSubmit(values);
+      } finally {
+        submitting = false;
+        // If onSubmit succeeded it already called closeModal() — these are
+        // then harmless no-ops on a detached button.
+        if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = originalLabel; }
+      }
     });
   }
 
   function recomputeAndMaybeRerender(changedField) {
     const needsRerender = fields.some((f) => f.showIf) || fields.some((f) => f.type === 'preview');
     if (needsRerender) {
-      const active = document.activeElement && document.activeElement.name;
+      // Bug fix: a form with any conditional (showIf) field rebuilds its
+      // whole <form> HTML on every keystroke in ANY field — including ones
+      // with nothing conditional about them (e.g. Master Harga's "Satuan",
+      // or "Harga Dasar" once it's reformatting itself) — so the input the
+      // user is actively typing in is destroyed and recreated each time.
+      // The old code only restored *focus* by field name, which drops the
+      // caret back to the start of the value; capturing and restoring the
+      // actual caret offset (selectionStart) across the rebuild is what was
+      // missing, and is what caused typing "7000" to land as "700|0" etc.
+      const activeEl = document.activeElement;
+      const activeName = activeEl && activeEl.name;
+      const caretPos = activeEl && typeof activeEl.selectionStart === 'number' ? activeEl.selectionStart : null;
       renderFields();
-      if (active) {
-        const el2 = root.querySelector(`[name="${active}"]`);
-        if (el2) el2.focus();
+      if (activeName) {
+        const el2 = root.querySelector(`[name="${activeName}"]`);
+        if (el2) {
+          el2.focus();
+          if (caretPos !== null && typeof el2.setSelectionRange === 'function') {
+            const pos = Math.min(caretPos, el2.value.length);
+            try { el2.setSelectionRange(pos, pos); } catch (e) { /* select/date inputs don't support this — harmless */ }
+          }
+        }
       }
     }
   }
@@ -312,6 +370,90 @@ export function buildForm(root, fields, values, lookups, onSubmit, { mode = 'add
   }
 
   renderFields();
+  setModalDirtyCheck(isDirty);
+}
+
+// ---------------------------------------------------------------------------
+// THE SINGLE SHARED NUMERIC/CURRENCY INPUT MECHANISM — "CurrencyInput".
+// ---------------------------------------------------------------------------
+// There is exactly ONE place in the whole frontend that renders a numeric
+// field and exactly ONE place that wires its typing behavior:
+//   - renderFieldHtml() below (the `f.type === 'number'` branch) renders the
+//     control — always `<input type="text" inputmode="decimal">`, never
+//     `<input type="number">`, so there is no browser spinner anywhere.
+//   - wire()'s per-field `input` listener (above) is the only place that
+//     reacts to keystrokes on a number field.
+// Every price/nominal/quantity field in the app — Master Harga (Harga Dasar,
+// Tambahan per Warna), Jahit/Sablon/GajiJahit/GajiSablon's Jumlah/Jumlah
+// Warna, GajiHarian's Jumlah Hari/Jam and Tarif fields, Kasbon's
+// Nominal/Total Hutang/Nominal Cicilan/Cicilan ke-, Pengeluaran's Nominal,
+// Period's Tahun, RekapBulanan's Nominal Koreksi, and any future
+// `{ type: 'number' }` field — is declared as data (a field-config object)
+// and rendered/wired through this single code path. There is no per-page
+// copy of this logic; a page that wants a numeric field just writes
+// `{ type: 'number' }` and gets this behavior automatically. This is what
+// the spec calls "satu CurrencyInput component" / "jangan ada 5 atau 10
+// implementasi berbeda" — it is already structurally true, not just a goal.
+//
+// RAW vs DISPLAY, and why the caret never gets lost:
+//   - RAW value = `values[f.key]`: a plain digit string (optional leading
+//     "-"), no separators. This is exactly what buildPayload()/
+//     validateAll()/the API contract already expect — Number(raw) always
+//     works, and the backend/DB never sees anything but a real number
+//     ({"basePrice": 7000}, never {"basePrice": "7.000"}).
+//   - DISPLAY value = the same digits with "." thousands grouping inserted
+//     (parseCurrencyDigits / formatCurrencyDisplay below), shown as the
+//     input's visible `value`.
+//   - Caret math is done by counting characters from the END of the string
+//     (`tailLen`), not from the start: whatever the browser's native
+//     Backspace/Delete/typing/Paste already did to `input.value` and
+//     `input.selectionStart` is trusted as ground truth, then the digits are
+//     re-derived and re-grouped, and the caret is placed so the same number
+//     of characters remain AFTER it as before the reformat. This is why
+//     typing "7000" digit-by-digit, deleting/inserting in the middle of
+//     "100|.000", Backspace, and Delete all keep the caret in the logically
+//     correct place — the browser's own caret placement for the raw
+//     keystroke is never overridden, only re-expressed after reformatting.
+//   - Paste is not special-cased: pasting "7000", "1.500.000", or the
+//     comma-grouped "1,500,000" all fire the same native `input` event, and
+//     `parseCurrencyDigits` strips every non-digit character (dot AND
+//     comma) before re-grouping with ".", so any of those pasted forms
+//     normalize to this app's Rupiah convention automatically.
+//   - Home/End/ArrowLeft/ArrowRight are NEVER intercepted (no keydown
+//     handler on these fields) — the browser's native caret movement is
+//     left completely alone, which is correct as-is.
+//   - The OTHER, deeper caret bug (typing in ANY field of a form that also
+//     has a conditional/preview field) is not in this section at all — see
+//     recomputeAndMaybeRerender() above, which is where that was fixed.
+//
+// `noGroup: true` opts a field OUT of the "." grouping only — the
+// sanitizing (no spinner, no stray leading zero) still applies. Used for
+// values that are numbers but not money: MasterData.js's Tahun (year, where
+// "2.026" would be wrong) and every quantity field app-wide (Jumlah, Jumlah
+// Warna, Jumlah Hari Biasa/Minggu, Jumlah Jam, Cicilan ke-) — a quantity of
+// 1500 pcs must display as "1500", never "1.500", since that would read as
+// a different quantity, not a formatting nicety.
+// ---------------------------------------------------------------------------
+function sanitizeNumberDigits(raw) {
+  const str = String(raw ?? '');
+  const negative = str.trim().charAt(0) === '-';
+  let digits = str.replace(/[^\d]/g, '');
+  digits = digits.replace(/^0+(?=\d)/, ''); // "0007" -> "7", but a lone "0" stays "0"
+  return negative && digits ? '-' + digits : digits;
+}
+
+function groupThousands(signed) {
+  if (!signed) return '';
+  const negative = signed.charAt(0) === '-';
+  const digits = negative ? signed.slice(1) : signed;
+  if (!digits) return negative ? '-' : '';
+  const grouped = digits.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+  return negative ? '-' + grouped : grouped;
+}
+
+function formatNumberDisplay(rawValue, noGroup) {
+  const digits = sanitizeNumberDigits(rawValue);
+  return noGroup ? digits : groupThousands(digits);
 }
 
 function renderFieldHtml(f, values, lookups) {
@@ -333,8 +475,16 @@ function renderFieldHtml(f, values, lookups) {
     control = `<div class="field-computed">${f.render(values, lookups)}</div>`;
   } else if (f.type === 'date') {
     control = `<input class="input" type="date" name="${f.key}" value="${escapeHtml(val ?? '')}" />`;
+  } else if (f.type === 'number') {
+    // Rendered as a masked text input, not <input type="number"> — removes
+    // the native up/down spinner and lets us fully control formatting
+    // (Indonesian "." thousands grouping, no leading zeros) while keeping
+    // `values[f.key]` a plain digit string underneath (wire() below).
+    // f.min is still enforced in validateAll(); it's just not a native
+    // HTML attribute anymore since this isn't a number input.
+    control = `<input class="input" type="text" inputmode="decimal" name="${f.key}" value="${escapeHtml(formatNumberDisplay(val, f.noGroup))}" placeholder="${escapeHtml(f.placeholder || '')}" />`;
   } else {
-    control = `<input class="input" type="${f.type || 'text'}" name="${f.key}" value="${escapeHtml(val ?? '')}" ${f.min !== undefined ? `min="${f.min}"` : ''} placeholder="${escapeHtml(f.placeholder || '')}" />`;
+    control = `<input class="input" type="${f.type || 'text'}" name="${f.key}" value="${escapeHtml(val ?? '')}" placeholder="${escapeHtml(f.placeholder || '')}" />`;
   }
   return `<div class="field${f.span2 ? '' : ''}" data-field-wrap="${f.key}" style="${f.fullWidth ? 'grid-column:1/-1' : ''}">
     <label>${escapeHtml(f.label)} ${required}</label>
@@ -354,4 +504,9 @@ function applyFieldErrors(root, fieldErrors) {
   });
 }
 
+// Clear, spec-facing names for the same single masking mechanism described
+// above — exported so any future page can reuse it directly instead of
+// reimplementing it, without changing the internal names already used
+// throughout this file.
+export { sanitizeNumberDigits as parseCurrencyDigits, formatNumberDisplay as formatCurrencyDisplay };
 export { formatCurrency, formatDate, icon };

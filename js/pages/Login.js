@@ -6,13 +6,35 @@ import { login } from '../auth.js';
 import { toggleTheme, currentTheme } from '../theme.js';
 import { icon } from '../icons.js';
 import { APP_NAME } from '../config.js';
+import { peek } from '../cache.js';
+
+// Pre-login: there's no authenticated getLookups() call yet (the API
+// requires a token), so this can only use whatever getLookups() payload is
+// already sitting in this tab's cache from an earlier session (same
+// person logging back in) — never a fresh fetch. Falls back to the "BW"
+// text mark otherwise; the real logo always shows once logged in
+// regardless (router.js's shell fetches getLookups() right after auth).
+function cachedLogoUrl() {
+  try {
+    const cached = peek('getLookups', {});
+    const rows = cached && cached.settings;
+    if (!Array.isArray(rows)) return null;
+    const row = rows.find((r) => r.key === 'company_logo');
+    if (!row || !row.value) return null;
+    const ref = JSON.parse(row.value);
+    return (ref && ref.url) || null;
+  } catch (e) {
+    return null;
+  }
+}
 
 export async function render(container) {
+  const logoUrl = cachedLogoUrl();
   container.innerHTML = `
     <button class="theme-toggle login-theme-toggle" data-theme-toggle id="login-theme-btn"></button>
     <div class="login-screen">
       <div class="login-card">
-        <div class="brand-mark">BW</div>
+        <div class="brand-mark">${logoUrl ? `<img src="${logoUrl}" alt="Logo perusahaan" />` : 'BW'}</div>
         <h1>${APP_NAME}</h1>
         <div class="subtitle">Masuk untuk mengelola laporan bulanan workshop.</div>
         <form id="login-form" novalidate>

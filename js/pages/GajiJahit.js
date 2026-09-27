@@ -41,7 +41,7 @@ export async function render(container) {
       { key: 'sewing_job_type_id', label: 'Jenis Pekerjaan Borongan', type: 'select', required: true,
         options: (v, lk) => activeOnly(lk?.sewingJobTypes).map((p) => ({ value: p.id, label: p.name })) },
       { key: 'nama_order', label: 'Nama Order', required: true },
-      { key: 'jumlah', label: 'Jumlah', type: 'number', required: true, min: 1 },
+      { key: 'jumlah', label: 'Jumlah', type: 'number', required: true, min: 1, noGroup: true },
       { key: 'preview', label: 'Harga Borongan & Total (pratinjau)', type: 'preview', render: (v) => renderPreview(v) }
     ],
     buildPayload: (v) => ({

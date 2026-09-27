@@ -42,8 +42,8 @@ export async function render(container) {
       { key: 'ink_type_id', label: 'Jenis Tinta', type: 'select', required: true,
         options: (v, lk) => activeOnly(lk?.inkTypes).map((p) => ({ value: p.id, label: p.name })) },
       { key: 'nama_desain', label: 'Nama Desain', required: true },
-      { key: 'jumlah_warna', label: 'Jumlah Warna', type: 'number', required: true, min: 1 },
-      { key: 'jumlah', label: 'Jumlah', type: 'number', required: true, min: 1 },
+      { key: 'jumlah_warna', label: 'Jumlah Warna', type: 'number', required: true, min: 1, noGroup: true },
+      { key: 'jumlah', label: 'Jumlah', type: 'number', required: true, min: 1, noGroup: true },
       { key: 'preview', label: 'Harga Borongan & Total (pratinjau)', type: 'preview', render: (v) => renderPreview(v) }
     ],
     buildPayload: (v) => ({

@@ -52,10 +52,10 @@ export async function render(container) {
     formFields: [
       { key: 'employee_id', label: 'Pekerja', type: 'select', required: true, options: (v, lk) => toOptions(lk?.employees),
         onChange: (v, lk) => autoFillDaily(v, lk) },
-      { key: 'jumlah_hari_biasa', label: 'Jumlah Hari Biasa', type: 'number', required: true, min: 0 },
+      { key: 'jumlah_hari_biasa', label: 'Jumlah Hari Biasa', type: 'number', required: true, min: 0, noGroup: true },
       { key: 'tarif_harian', label: 'Tarif Harian', type: 'number', required: true, min: 0,
         default: () => '', hint: 'Terisi dari tarif pekerja / default global — bisa diubah manual.' },
-      { key: 'jumlah_hari_minggu', label: 'Jumlah Hari Minggu', type: 'number', required: true, min: 0 },
+      { key: 'jumlah_hari_minggu', label: 'Jumlah Hari Minggu', type: 'number', required: true, min: 0, noGroup: true },
       { key: 'tarif_minggu', label: 'Tarif Minggu', type: 'number', required: true, min: 0,
         hint: 'Terisi dari tarif pekerja / default global — bisa diubah manual.' },
       { key: 'tarif_tag', label: 'Sumber tarif pekerja', type: 'preview', render: (v) => tarifTag(v, 'tarif_harian', 'tarif_minggu') },
@@ -96,7 +96,7 @@ export async function render(container) {
     formFields: [
       { key: 'employee_id', label: 'Pekerja', type: 'select', required: true, options: (v, lk) => toOptions(lk?.employees),
         onChange: (v, lk) => autoFillOvertime(v, lk) },
-      { key: 'jumlah_jam', label: 'Jumlah Jam', type: 'number', required: true, min: 0 },
+      { key: 'jumlah_jam', label: 'Jumlah Jam', type: 'number', required: true, min: 0, noGroup: true },
       { key: 'tarif_per_jam', label: 'Tarif Lembur / Jam', type: 'number', required: true, min: 0,
         hint: 'Terisi dari tarif pekerja / default global — bisa diubah manual.' },
       { key: 'tarif_tag', label: 'Sumber tarif pekerja', type: 'preview', render: (v) => tarifTag(v, null, null, 'tarif_per_jam') },

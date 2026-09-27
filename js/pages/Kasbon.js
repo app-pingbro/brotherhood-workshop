@@ -51,7 +51,7 @@ export async function render(container) {
         showIf: (v) => v.jenis === 'hutang_cicilan' },
       { key: 'nominal_cicilan', label: 'Nominal Cicilan', type: 'number', min: 0,
         showIf: (v) => v.jenis === 'hutang_cicilan' },
-      { key: 'cicilan_ke', label: 'Cicilan ke-', type: 'number', min: 1,
+      { key: 'cicilan_ke', label: 'Cicilan ke-', type: 'number', min: 1, noGroup: true,
         showIf: (v) => v.jenis === 'hutang_cicilan' },
       { key: 'keterangan', label: 'Keterangan', type: 'textarea', fullWidth: true }
     ],

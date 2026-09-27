@@ -43,7 +43,7 @@ export async function render(container) {
       { key: 'product_type_id', label: 'Jenis Produk', type: 'select', required: true,
         options: (v, lk) => activeOnly(lk?.productTypes).map((p) => ({ value: p.id, label: p.name })) },
       { key: 'nama_order', label: 'Nama Order', required: true, placeholder: 'mis. Order A' },
-      { key: 'jumlah', label: 'Jumlah', type: 'number', required: true, min: 1 },
+      { key: 'jumlah', label: 'Jumlah', type: 'number', required: true, min: 1, noGroup: true },
       { key: 'harga_preview', label: 'Harga & Total (pratinjau)', type: 'preview',
         render: (v) => renderPreview(v) },
       { key: 'catatan', label: 'Catatan', type: 'textarea', fullWidth: true }
