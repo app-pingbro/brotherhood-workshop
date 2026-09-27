@@ -4,7 +4,7 @@
 // Paste your deployed Google Apps Script Web App URL below (ends with /exec).
 // Deploy: Apps Script editor -> Deploy -> New deployment -> Web app
 //         Execute as: Me · Who has access: Anyone
-export const GAS_URL = 'PASTE_YOUR_GAS_WEB_APP_URL_HERE';
+export const GAS_URL = 'https://script.google.com/macros/s/AKfycbzQ-x9DJCyfRKbXpDIfvZ0SrDTgCKpCLoCygNeZYex_UklkT_-kLg6NMBA7-t_-O8hr/exec';
 
 // App-wide constants (must match the backend contract exactly).
 export const OWNERS = [
