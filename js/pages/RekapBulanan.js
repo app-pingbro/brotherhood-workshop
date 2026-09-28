@@ -32,18 +32,28 @@ export async function render(container) {
   const period = getCurrentPeriod();
   container.innerHTML = `
     <div class="page-header">
-      <div><h1>Rekap Bulanan</h1><div class="subtitle">${period ? escapeHtml(formatPeriodLabel(period)) : 'Pilih periode di kanan atas'}</div></div>
+      <div style="display:flex; align-items:center; gap:12px;">
+        <div class="page-icon">${icon('dashboard', 20)}</div>
+        <div><h1>Rekap Bulanan</h1><div class="subtitle">${period ? escapeHtml(formatPeriodLabel(period)) : 'Pilih periode di kanan atas'}</div></div>
+      </div>
       <div class="page-header__actions" id="period-actions"></div>
     </div>
-    <div id="saldo-section">${skeletonKpis(3)}</div>
+    <div id="ringkasan-section" class="mt-16">${skeletonKpis(5)}</div>
+    <div id="saldo-section" class="mt-16">${skeletonKpis(3)}</div>
     <div class="card mt-16">
-      <h3>Matriks Rekap</h3>
-      <div id="matrix-section" class="mt-12">${skeletonTable(6, 6)}</div>
+      <h3 style="display:flex; align-items:center; gap:8px;">${icon('list', 18)} Rincian Perhitungan</h3>
+      <div id="matrix-section" class="mt-12">${skeletonTable(7, 7)}</div>
     </div>
+    <div class="card mt-16" id="formula-section"></div>
     <div class="card mt-16" id="koreksi-section"></div>
   `;
 
+  // Kartu formula bersifat statis (tidak tergantung data recap) — dirender
+  // langsung, tidak perlu menunggu fetch selesai.
+  renderFormulaCard();
+
   if (!period) {
+    document.getElementById('ringkasan-section').innerHTML = '';
     document.getElementById('saldo-section').innerHTML = '<div class="notice notice-info">Pilih periode terlebih dahulu.</div>';
     document.getElementById('matrix-section').innerHTML = '';
     document.getElementById('koreksi-section').innerHTML = '';
@@ -76,10 +86,12 @@ export async function render(container) {
   const recapPromise = fetchSWR('getMonthlyRecap', { period_id: period.id }, (recap) => {
     painted = true;
     latestRecap = recap;
+    renderRingkasan(recap);
     renderSaldo(recap, period);
     repaintMatrix();
   }).catch(() => {
     if (!painted) {
+      document.getElementById('ringkasan-section').innerHTML = '';
       document.getElementById('saldo-section').innerHTML = `<div class="notice notice-critical">${icon('alert')} Gagal memuat Rekap Bulanan.</div>`;
       document.getElementById('matrix-section').innerHTML = '';
     }
@@ -189,7 +201,10 @@ function renderSaldo(recap, period) {
   `;
 }
 
-function buildMatrixRows(recap, deductions) {
+// Dipakai bersama oleh renderRingkasan() (5 kartu ringkasan) dan
+// buildMatrixRows() (tabel rinci) supaya angkanya SELALU sama persis — tidak
+// ada rumus yang dihitung dua kali secara terpisah dan bisa berbeda.
+function computeTotals(recap) {
   const perOwner = recap.perOwner || {};
   const ownerRow = Object.values(perOwner); // {owner_id, owner_name, owner_code, jahit, sablon, pengeluaran, pemasukan}
   const byCode = (code) => ownerRow.find((o) => String(o.owner_code || '').toUpperCase() === code) || {};
@@ -198,7 +213,63 @@ function buildMatrixRows(recap, deductions) {
   const gajiTotal = (Number(gaji.gajiJahit) || 0) + (Number(gaji.gajiSablon) || 0) +
     (Number(gaji.gajiHarian) || 0) + (Number(gaji.gajiMinggu) || 0) + (Number(gaji.lembur) || 0);
   const pengeluaran = recap.pengeluaran || {};
-  const pengeluaranTotal = (Number(pengeluaran.pingbro) || 0) + (Number(pengeluaran.sunrise) || 0);
+  const omzetJahit = (P.jahit || 0) + (S.jahit || 0) + (B.jahit || 0);
+  const omzetSablon = (P.sablon || 0) + (S.sablon || 0) + (B.sablon || 0);
+  return { P, S, B, gaji, gajiTotal, pengeluaran, omzetJahit, omzetSablon };
+}
+
+// Feature F #3 (perbaikan tampilan, referensi mockup dari user): 5 kartu
+// ringkasan berwarna di atas tabel rinci — Omzet Jahit/Sablon, Total
+// Pemasukan, Total Pengeluaran, Hasil Bersih. Semua nilai diambil dari
+// computeTotals()/recap langsung (tidak ada angka baru/dummy).
+function renderRingkasan(recap) {
+  const root = document.getElementById('ringkasan-section');
+  if (!root) return;
+  if (!recap) { root.innerHTML = ''; return; }
+  const t = computeTotals(recap);
+  const cards = [
+    { label: 'Omzet Jahit', value: t.omzetJahit, iconName: 'scissors', tone: 'success' },
+    { label: 'Omzet Sablon', value: t.omzetSablon, iconName: 'droplet', tone: 'success' },
+    { label: 'Total Pemasukan', value: recap.totalPemasukan, iconName: 'wallet', tone: 'info' },
+    { label: 'Total Pengeluaran', value: recap.totalBiaya, iconName: 'receipt', tone: 'critical' },
+    { label: 'Hasil Bersih', value: recap.hasilBulan, iconName: 'target', tone: 'highlight' }
+  ];
+  root.innerHTML = `<div class="grid grid-kpi">${cards.map((c) => `
+    <div class="card ringkasan-card ringkasan-card--${c.tone}">
+      <div class="stat-icon stat-icon--${c.tone}">${icon(c.iconName, 18)}</div>
+      <div><div class="label">${escapeHtml(c.label)}</div><div class="value">${formatCurrency(c.value)}</div></div>
+    </div>`).join('')}</div>`;
+}
+
+// Kartu "Formula Perhitungan" statis di bawah tabel — teks disesuaikan
+// dengan rumus yang BENAR-BENAR berjalan di sistem saat ini (Total Biaya =
+// Pengeluaran PINGBRO+SUNRISE, dikonfirmasi bersama user sebelumnya), bukan
+// rumus lama "Rekap = (Rekap Bulanan + Omzet Sablon) - (Pengeluaran - Gaji...)"
+// yang sempat dipakai di draft awal — menampilkan rumus yang tidak sesuai
+// angka yang sebenarnya dihitung justru akan membingungkan, bukan membantu.
+function renderFormulaCard() {
+  const root = document.getElementById('formula-section');
+  if (!root) return;
+  root.innerHTML = `
+    <div class="formula-card">
+      <div class="formula-card__icon">${icon('info', 18)}</div>
+      <div class="formula-card__body">
+        <strong>Formula Perhitungan:</strong>
+        <div class="formula-card__formula">
+          Hasil Bulan = Total Pemasukan &minus; Total Biaya<br>
+          Total Biaya = Pengeluaran PINGBRO + Pengeluaran SUNRISE
+        </div>
+      </div>
+      <ul class="formula-card__notes">
+        <li>Semua Gaji &amp; Lembur sudah tercatat di Pengeluaran (dibayar oleh Owner PINGBRO/SUNRISE), sehingga tidak dihitung dua kali di Total Biaya.</li>
+        <li>Kasbon &amp; Potongan adalah potongan Slip Gaji pekerja, bukan biaya Owner &mdash; "Total Bersih" di Rincian Gaji &amp; Lembur murni informasi dan tidak memengaruhi Total Biaya/Hasil Bulan.</li>
+        <li>Semua angka mengikuti Owner dan periode yang sedang dipilih.</li>
+      </ul>
+    </div>`;
+}
+
+function buildMatrixRows(recap, deductions) {
+  const { P, S, B, gaji, gajiTotal, pengeluaran, omzetJahit, omzetSablon } = computeTotals(recap);
 
   // Feature F #1 — Total Kasbon / Total Potongan / Total Bersih di Rincian
   // Gaji & Lembur. PAYROLL_DEDUCTIONS punya 3 jenis (lihat config.js
@@ -232,34 +303,53 @@ function buildMatrixRows(recap, deductions) {
   const totalPotongan = sumJenis('potongan_lain', 'nominal') + sumJenis('hutang_cicilan', 'nominal_cicilan');
   const totalBersih = gajiTotal - (totalKasbon + totalPotongan);
 
-  const row = (label, { pingbro = null, sunrise = null, brotherhood = null, bersama = null, gabungan, emphasize = false } = {}) => ({
-    label, emphasize,
-    values: { PINGBRO: pingbro, SUNRISE: sunrise, BROTHERHOOD: brotherhood, BIAYA_BERSAMA: bersama, GABUNGAN: gabungan }
+  // Feature F #3 (tampilan): setiap baris data bernomor urut otomatis; baris
+  // pemisah bagian ("Rincian Gaji & Lembur...") dan baris akhir "Hasil
+  // Bulan" (ikon target, bukan nomor) TIDAK ikut diberi nomor — persis
+  // seperti referensi tampilan dari user.
+  let n = 0;
+  const row = (label, { pingbro = null, sunrise = null, brotherhood = null, bersama = null, gabungan, emphasize = false, tone = null } = {}) => {
+    n += 1;
+    return {
+      no: n, label, emphasize, tone,
+      values: { PINGBRO: pingbro, SUNRISE: sunrise, BROTHERHOOD: brotherhood, BIAYA_BERSAMA: bersama, GABUNGAN: gabungan }
+    };
+  };
+  const sectionRow = (label) => ({ isSection: true, label });
+  const finalRow = (label, { gabungan, tone = null }) => ({
+    isFinal: true, label, emphasize: true, tone,
+    values: { PINGBRO: null, SUNRISE: null, BROTHERHOOD: null, BIAYA_BERSAMA: null, GABUNGAN: gabungan }
   });
 
   return [
-    row('Omzet Jahit', { pingbro: P.jahit, sunrise: S.jahit, brotherhood: B.jahit, gabungan: (P.jahit||0)+(S.jahit||0)+(B.jahit||0) }),
-    row('Omzet Sablon', { pingbro: P.sablon, sunrise: S.sablon, brotherhood: B.sablon, gabungan: (P.sablon||0)+(S.sablon||0)+(B.sablon||0) }),
-    row('Total Pemasukan', { pingbro: P.pemasukan, sunrise: S.pemasukan, brotherhood: B.pemasukan, gabungan: recap.totalPemasukan, emphasize: true }),
+    row('Omzet Jahit', { pingbro: P.jahit, sunrise: S.jahit, brotherhood: B.jahit, gabungan: omzetJahit }),
+    row('Omzet Sablon', { pingbro: P.sablon, sunrise: S.sablon, brotherhood: B.sablon, gabungan: omzetSablon }),
+    row('Total Pemasukan', { pingbro: P.pemasukan, sunrise: S.pemasukan, brotherhood: B.pemasukan, gabungan: recap.totalPemasukan, emphasize: true, tone: 'success' }),
     // Baris "Rincian Gaji & Lembur" di bawah ini BERSIFAT INFORMASI SAJA —
     // gaji & lembur sudah tercatat sebagai baris Pengeluaran (dibayar oleh
     // Owner PINGBRO/SUNRISE), sehingga TIDAK ikut dijumlahkan lagi ke
     // "Total Biaya" (lihat computeRecapForPeriod_ di Rekap.gs). Baris ini
     // sengaja tidak punya nilai "Gabungan" ikut ke Total Biaya di bawah,
     // supaya tidak terlihat seperti dihitung dua kali.
-    row('Rincian Gaji & Lembur (informasi — sudah tercatat di Pengeluaran, tidak dihitung ulang)'),
+    sectionRow('Rincian Gaji & Lembur (setelah Kasbon & Potongan)'),
     row('Gaji Jahit Borongan', { bersama: gaji.gajiJahit, gabungan: gaji.gajiJahit }),
     row('Gaji Sablon Borongan', { bersama: gaji.gajiSablon, gabungan: gaji.gajiSablon }),
     row('Gaji Harian', { bersama: gaji.gajiHarian, gabungan: gaji.gajiHarian }),
     row('Gaji Minggu', { bersama: gaji.gajiMinggu, gabungan: gaji.gajiMinggu }),
     row('Lembur', { bersama: gaji.lembur, gabungan: gaji.lembur }),
-    row('Total Gaji & Lembur', { bersama: gajiTotal, gabungan: gajiTotal, emphasize: true }),
-    row('Total Kasbon', { bersama: -totalKasbon, gabungan: -totalKasbon }),
-    row('Total Potongan', { bersama: -totalPotongan, gabungan: -totalPotongan }),
-    row('Total Bersih (Gaji & Lembur setelah Kasbon/Potongan)', { bersama: totalBersih, gabungan: totalBersih, emphasize: true }),
-    row('Pengeluaran', { pingbro: pengeluaran.pingbro, sunrise: pengeluaran.sunrise, brotherhood: null, gabungan: pengeluaranTotal }),
-    row('Total Biaya (= Pengeluaran PINGBRO + SUNRISE)', { gabungan: recap.totalBiaya, emphasize: true }),
-    row('Hasil Bulan', { gabungan: recap.hasilBulan, emphasize: true })
+    row('Total Gaji & Lembur', { bersama: gajiTotal, gabungan: gajiTotal, emphasize: true, tone: 'info' }),
+    row('Total Kasbon', { bersama: -totalKasbon, gabungan: -totalKasbon, tone: 'critical' }),
+    row('Total Potongan', { bersama: -totalPotongan, gabungan: -totalPotongan, tone: 'critical' }),
+    row('Total Bersih (Gaji & Lembur setelah Kasbon/Potongan)', { bersama: totalBersih, gabungan: totalBersih, emphasize: true, tone: 'info' }),
+    // "Pengeluaran" DAN "Total Biaya" adalah angka yang SAMA persis
+    // (Total Biaya = Pengeluaran PINGBRO + SUNRISE, lihat Rekap.gs) — baris
+    // "Total Biaya" terpisah yang dulu ada di sini dihapus karena hanya
+    // mengulang angka yang sama dan berpotensi membingungkan (referensi
+    // tampilan user juga tidak punya baris terpisah untuk ini). Nilai
+    // Gabungan di sini diambil LANGSUNG dari recap.totalBiaya (bukan
+    // dihitung ulang secara lokal) supaya selalu 100% sama dengan sumbernya.
+    row('Pengeluaran (= Total Biaya)', { pingbro: pengeluaran.pingbro, sunrise: pengeluaran.sunrise, brotherhood: null, gabungan: recap.totalBiaya, emphasize: true, tone: 'warning' }),
+    finalRow('Hasil Bulan', { gabungan: recap.hasilBulan, tone: 'highlight' })
   ];
 }
 
@@ -279,16 +369,26 @@ function renderMatrix(recap, deductions) {
     const n = Number(v) || 0;
     return n < 0 ? `-${formatCurrency(Math.abs(n))}` : formatCurrency(n);
   };
+  const colspan = 2 + COLUMNS.length;
   root.innerHTML = `<div class="table-wrap"><table class="data-table recap-matrix">
-    <thead><tr><th>Metrik</th>${COLUMNS.map((c) => `<th class="num">${c.label}</th>`).join('')}</tr></thead>
-    <tbody>${rows.map((r) => `
-      <tr class="${r.emphasize ? 'total-row' : ''}">
+    <thead><tr><th class="num-col">No</th><th>Metrik</th>${COLUMNS.map((c) => `<th class="num">${c.label}</th>`).join('')}</tr></thead>
+    <tbody>${rows.map((r) => {
+      if (r.isSection) {
+        return `<tr class="row-section"><td colspan="${colspan}">${escapeHtml(r.label)}</td></tr>`;
+      }
+      const toneClass = r.tone ? `row-tone--${r.tone}` : '';
+      const negClass = Object.values(r.values).some((v) => typeof v === 'number' && v < 0) ? 'row-negative' : '';
+      const noCell = r.isFinal ? `<td class="icon-col">${icon('target', 16)}</td>` : `<td class="num-col">${r.no}</td>`;
+      return `
+      <tr class="${toneClass} ${negClass} ${r.emphasize ? 'total-row' : ''}">
+        ${noCell}
         <td class="metric-label">${escapeHtml(r.label)}</td>
         ${COLUMNS.map((c) => `<td class="num">${cell(r.values[c.key])}</td>`).join('')}
-      </tr>`).join('')}
+      </tr>`;
+    }).join('')}
     </tbody>
   </table></div>
-  <p class="subtitle mt-8">Gaji &amp; Lembur dibayar dari tenaga kerja bersama (shared labor pool) sehingga tidak dapat diatribusikan ke satu Owner — selalu tampil di kolom Biaya Bersama sebagai rincian informasi. Gaji &amp; Lembur sudah tercatat sebagai baris Pengeluaran (dibayar oleh Owner PINGBRO/SUNRISE) sehingga <strong>tidak dijumlahkan lagi</strong> ke "Total Biaya" — Total Biaya = Pengeluaran PINGBRO + SUNRISE saja, agar tidak dihitung dua kali. Kasbon &amp; Potongan (dari halaman Kasbon &amp; Potongan) adalah potongan Slip Gaji pekerja, bukan biaya Owner — "Total Bersih" di rincian ini hanya informasi gaji-setelah-potongan per pekerja secara agregat, dan tidak memengaruhi Total Biaya/Hasil Bulan di bawah. Pengeluaran hanya berlaku untuk PINGBRO &amp; SUNRISE (BROTHERHOOD tidak menanggung Pengeluaran operasional).</p>`;
+  <p class="subtitle mt-8">Gaji &amp; Lembur dibayar dari tenaga kerja bersama (shared labor pool) sehingga tidak dapat diatribusikan ke satu Owner — selalu tampil di kolom Biaya Bersama sebagai rincian informasi. Gaji &amp; Lembur sudah tercatat sebagai baris Pengeluaran (dibayar oleh Owner PINGBRO/SUNRISE) sehingga <strong>tidak dijumlahkan lagi</strong> ke "Total Biaya" — Pengeluaran = Total Biaya, agar tidak dihitung dua kali. Kasbon &amp; Potongan (dari halaman Kasbon &amp; Potongan) adalah potongan Slip Gaji pekerja, bukan biaya Owner — "Total Bersih" di rincian ini hanya informasi gaji-setelah-potongan per pekerja secara agregat, dan tidak memengaruhi Total Biaya/Hasil Bulan di bawah. Pengeluaran hanya berlaku untuk PINGBRO &amp; SUNRISE (BROTHERHOOD tidak menanggung Pengeluaran operasional).</p>`;
 }
 
 function renderKoreksiForm(period) {

@@ -267,6 +267,68 @@ table.data-table { width: 100%; border-collapse: collapse; min-width: 640px; }
 .saldo-box .value { font-family: var(--font-display); font-size: 18px; font-weight: 800; margin-top: 6px; }
 .saldo-op { display: flex; align-items: center; justify-content: center; font-size: 20px; font-weight: 800; color: var(--color-text-low); }
 
+/* ---------------------------------------------------------------------- */
+/* Rekap Bulanan — ringkasan cards & matriks bernomor dengan pita warna     */
+/* per bagian (reuses existing status-*/color-* tokens, so light/dark mode */
+/* need no extra work — see theme.css for both palettes).                  */
+/* ---------------------------------------------------------------------- */
+.page-icon {
+  width: 40px; height: 40px; border-radius: var(--radius-sm);
+  background: var(--color-primary); color: var(--color-on-primary);
+  display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+}
+
+.ringkasan-card { display: flex; align-items: center; gap: 12px; border-color: transparent; }
+.ringkasan-card .label { font-size: 11.5px; font-weight: 700; color: var(--color-text-medium); text-transform: uppercase; letter-spacing: .03em; }
+.ringkasan-card .value { font-family: var(--font-display); font-size: 18px; font-weight: 800; margin-top: 3px; }
+.ringkasan-card--success { background: var(--status-success-bg); }
+.ringkasan-card--info { background: var(--status-info-bg); }
+.ringkasan-card--warning { background: var(--status-warning-bg); }
+.ringkasan-card--critical { background: var(--status-critical-bg); }
+.ringkasan-card--highlight { background: var(--status-highlight-bg); }
+
+.stat-icon {
+  width: 40px; height: 40px; border-radius: 50%; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center; color: #fff;
+}
+.stat-icon--success { background: var(--status-success-fg); }
+.stat-icon--info { background: var(--status-info-fg); }
+.stat-icon--warning { background: var(--status-warning-fg); }
+.stat-icon--critical { background: var(--status-critical-fg); }
+.stat-icon--highlight { background: var(--status-highlight-fg); }
+
+.recap-matrix .row-tone--success td { background: var(--status-success-bg); }
+.recap-matrix .row-tone--info td { background: var(--status-info-bg); }
+.recap-matrix .row-tone--warning td { background: var(--status-warning-bg); }
+.recap-matrix .row-tone--critical td { background: var(--status-critical-bg); }
+.recap-matrix .row-tone--highlight td { background: var(--status-highlight-bg); }
+.recap-matrix .row-negative .num { color: var(--color-red); font-weight: 700; }
+.recap-matrix .row-section td {
+  background: var(--color-surface-muted); font-weight: 800; font-size: 12px;
+  text-transform: uppercase; letter-spacing: .03em; color: var(--color-text-medium);
+  padding-top: 10px; padding-bottom: 10px;
+}
+.recap-matrix td.num-col, .recap-matrix th.num-col { width: 34px; text-align: center; color: var(--color-text-low); font-weight: 700; }
+.recap-matrix td.icon-col { text-align: center; }
+
+.formula-card { display: flex; gap: 20px; flex-wrap: wrap; align-items: flex-start; }
+.formula-card__icon {
+  width: 36px; height: 36px; border-radius: 50%; flex-shrink: 0;
+  background: var(--status-info-bg); color: var(--status-info-fg);
+  display: flex; align-items: center; justify-content: center;
+}
+.formula-card__body { flex: 1 1 260px; }
+.formula-card__formula {
+  font-family: var(--font-display); font-weight: 700; font-size: 13.5px;
+  background: var(--color-surface-muted); border-radius: var(--radius-sm);
+  padding: 10px 12px; margin-top: 6px; line-height: 1.6;
+}
+.formula-card__notes { flex: 1 1 260px; margin: 0; padding-left: 18px; font-size: 12.5px; color: var(--color-text-medium); line-height: 1.9; }
+
+@media (max-width: 640px) {
+  .ringkasan-card { flex-direction: column; align-items: flex-start; text-align: left; }
+}
+
 /* Recap matrix */
 .recap-matrix th, .recap-matrix td { white-space: nowrap; }
 .recap-matrix .metric-label { font-weight: 700; }

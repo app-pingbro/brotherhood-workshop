@@ -43,6 +43,10 @@
   --status-warning-fg: #B15E00;
   --status-critical-bg: rgba(220, 38, 38, 0.10);
   --status-critical-fg: #DC2626;
+  --status-info-bg: rgba(37, 99, 235, 0.10);
+  --status-info-fg: #2563EB;
+  --status-highlight-bg: rgba(124, 58, 237, 0.10);
+  --status-highlight-fg: #7C3AED;
 
   --shadow-sm: 0 1px 2px rgba(16, 16, 16, 0.06);
   --shadow-md: 0 6px 20px rgba(16, 16, 16, 0.08);
@@ -97,6 +101,10 @@
     --status-warning-fg: #FBBF24;
     --status-critical-bg: rgba(239, 68, 68, 0.12);
     --status-critical-fg: #F87171;
+    --status-info-bg: rgba(96, 165, 250, 0.14);
+    --status-info-fg: #60A5FA;
+    --status-highlight-bg: rgba(167, 139, 250, 0.16);
+    --status-highlight-fg: #C4B5FD;
 
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.30);
     --shadow-md: 0 6px 20px rgba(0, 0, 0, 0.40);
@@ -144,6 +152,10 @@
   --status-warning-fg: #FBBF24;
   --status-critical-bg: rgba(239, 68, 68, 0.12);
   --status-critical-fg: #F87171;
+  --status-info-bg: rgba(96, 165, 250, 0.14);
+  --status-info-fg: #60A5FA;
+  --status-highlight-bg: rgba(167, 139, 250, 0.16);
+  --status-highlight-fg: #C4B5FD;
 
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.30);
   --shadow-md: 0 6px 20px rgba(0, 0, 0, 0.40);
