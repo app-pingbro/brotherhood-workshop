@@ -38,10 +38,11 @@
 // ============================================================================
 import { fetchData, postData } from '../api.js';
 import { invalidate, invalidatePrefix } from '../cache.js';
-import { formatCurrency, escapeHtml, toast, badge, formatPeriodLabel } from '../ui.js';
+import { formatCurrency, escapeHtml, toast, badge, formatPeriodLabel, openModal, closeModal } from '../ui.js';
 import { icon } from '../icons.js';
 import { getCurrentPeriod, getLookups } from '../state.js';
 import { DEDUCTION_TYPES } from '../config.js';
+import { buildForm } from './_shared.js';
 
 const DEDUCTION_LABEL = Object.fromEntries(DEDUCTION_TYPES.map((t) => [t.value, t.label]));
 
@@ -164,6 +165,109 @@ const CATEGORY_DEFS = {
   }
 };
 
+// ---------------------------------------------------------------------------
+// CATEGORY_EDIT_FIELDS — Preview "Edit" button (requirement #2): one
+// buildForm-compatible field array per category, keyed EXACTLY to the raw
+// field names each category's row objects use in wiz.categories (see
+// handleWorkbook above), so a saved edit can be merged straight back into
+// that same raw row and re-sent through the normal preview/validate flow —
+// no separate edit-specific backend endpoint needed. Dropdown options are
+// sourced from Master Data (getLookups()) wherever the raw field is
+// name-matched server-side (Pekerja/Jenis/Owner/etc.), so a corrected value
+// is guaranteed to exist in Master Data before the user can even submit it.
+// ---------------------------------------------------------------------------
+function activeOptions(list) {
+  return (list || []).filter((x) => x.active !== false).map((x) => ({ value: x.name, label: x.name }));
+}
+
+const CATEGORY_EDIT_FIELDS = {
+  jahit: (lk) => [
+    { key: 'owner', label: 'Owner', type: 'select', required: true, options: () => activeOptions(lk?.owners) },
+    { key: 'jenis', label: 'Jenis', type: 'select', required: true, options: () => activeOptions(lk?.productTypes) },
+    { key: 'order', label: 'Order Jahit', required: true },
+    { key: 'jumlah', label: 'Jumlah', type: 'number', required: true, min: 1, noGroup: true }
+  ],
+  sablon: (lk) => [
+    { key: 'owner', label: 'Owner', type: 'select', required: true, options: () => activeOptions(lk?.owners) },
+    { key: 'jenis', label: 'Jenis', type: 'select', required: true, options: () => activeOptions(lk?.inkTypes) },
+    { key: 'design', label: 'Design Sablon', required: true },
+    { key: 'warna', label: 'Warna', type: 'number', required: true, min: 1, noGroup: true },
+    { key: 'jumlah', label: 'Jumlah', type: 'number', required: true, min: 1, noGroup: true }
+  ],
+  gaji_jahit: (lk) => [
+    { key: 'pekerja', label: 'Pekerja', type: 'select', required: true, options: () => activeOptions(lk?.employees) },
+    { key: 'jenis_pekerjaan', label: 'Jenis Pekerjaan', type: 'select', required: true, options: () => activeOptions(lk?.sewingJobTypes) },
+    { key: 'order', label: 'Nama Order', required: true },
+    { key: 'jumlah', label: 'Jumlah', type: 'number', required: true, min: 1, noGroup: true }
+  ],
+  gaji_sablon: (lk) => [
+    { key: 'pekerja', label: 'Pekerja', type: 'select', required: true, options: () => activeOptions(lk?.employees) },
+    { key: 'jenis_tinta', label: 'Jenis Tinta', type: 'select', required: true, options: () => activeOptions(lk?.inkTypes) },
+    { key: 'design', label: 'Nama Desain', required: true },
+    { key: 'warna', label: 'Warna', type: 'number', required: true, min: 1, noGroup: true },
+    { key: 'jumlah', label: 'Jumlah', type: 'number', required: true, min: 1, noGroup: true }
+  ],
+  gaji_harian: (lk) => [
+    { key: 'pekerja', label: 'Pekerja', type: 'select', required: true, options: () => activeOptions(lk?.employees) },
+    { key: 'hari_biasa', label: 'Jumlah Hari Biasa', type: 'number', required: true, min: 0, noGroup: true },
+    { key: 'hari_minggu', label: 'Jumlah Hari Minggu', type: 'number', required: true, min: 0, noGroup: true }
+  ],
+  lembur: (lk) => [
+    { key: 'pekerja', label: 'Pekerja', type: 'select', required: true, options: () => activeOptions(lk?.employees) },
+    { key: 'jam', label: 'Jumlah Jam', type: 'number', required: true, min: 1, noGroup: true }
+  ],
+  kasbon: (lk) => [
+    { key: 'pekerja', label: 'Pekerja', type: 'select', required: true, options: () => activeOptions(lk?.employees) },
+    { key: 'jenis', label: 'Jenis', type: 'select', required: true,
+      options: () => [{ value: 'Kasbon', label: 'Kasbon' }, { value: 'Potongan Lain', label: 'Potongan Lain' }] },
+    { key: 'keterangan', label: 'Keterangan', required: false },
+    { key: 'nominal', label: 'Nominal', type: 'number', required: true, min: 0 }
+  ],
+  pengeluaran: (lk) => [
+    { key: 'owner', label: 'Owner', type: 'select', required: true,
+      options: () => (lk?.owners || []).filter((o) => o.active !== false && String(o.code || '').toUpperCase() !== 'BROTHERHOOD').map((o) => ({ value: o.name, label: o.name })) },
+    { key: 'tanggal', label: 'Tanggal', type: 'date', required: true },
+    { key: 'jenis', label: 'Jenis Pengeluaran', required: true, datalist: () => (lk?.expenseTypes || []).map((e) => e.name) },
+    { key: 'keterangan', label: 'Keterangan', required: false },
+    { key: 'nominal', label: 'Nominal', type: 'number', required: true, min: 1 }
+  ]
+};
+
+/**
+ * Opens the "Edit" modal for one failed preview row (requirement #2): looks
+ * up the raw row this preview row came from (wiz.categories[module][rowNum-1]
+ * — the same 1-based `row` numbering validateAndPriceRow_ already uses
+ * throughout), lets the user correct it via the shared buildForm engine, then
+ * merges the corrected fields back into wiz.categories and re-runs the FULL
+ * server preview (runPreview) so the fix is revalidated exactly the same way
+ * as every other row — no separate "single row" validation path to trust.
+ */
+function openEditRowModal(module, rowNum) {
+  const rawList = wiz.categories && wiz.categories[module];
+  const editFieldsFn = CATEGORY_EDIT_FIELDS[module];
+  if (!rawList || !rawList[rowNum - 1] || !editFieldsFn) return;
+  const raw = rawList[rowNum - 1];
+  const def = CATEGORY_DEFS[module];
+  const lk = getLookups();
+  const errRow = ((wiz.preview && wiz.preview.categories[module] && wiz.preview.categories[module].errors) || [])
+    .find((e) => e.row === rowNum);
+
+  openModal({
+    title: `Edit Baris ${rowNum} — ${def.label}`,
+    bodyHtml: `${errRow ? `<div class="notice notice-critical mb-12">${icon('alert', 15)} ${escapeHtml(errRow.error)}</div>` : ''}<div id="edit-row-form-root"></div>`,
+    onMount: (body) => {
+      buildForm(body.querySelector('#edit-row-form-root'), editFieldsFn(lk), { ...raw }, lk, async (finalValues) => {
+        rawList[rowNum - 1] = { ...raw, ...finalValues };
+        closeModal();
+        toast('Baris diperbarui, memvalidasi ulang...', 'success');
+        wiz.step = 2;
+        renderStepBody();
+        runPreview();
+      }, { submitLabel: 'Simpan & Validasi Ulang' });
+    }
+  });
+}
+
 // Physical sheet names, in the exact order/labels the user's required
 // preview-summary format uses (requirement #5 — "JAHIT : 25 data", dst).
 // This is intentionally per PHYSICAL SHEET, not per backend category: GAJI
@@ -198,6 +302,23 @@ function sampleOwnerName(lk) {
 
 function isBlankRow(r) {
   return Object.values(r).every((v) => v === '' || v === null || v === undefined);
+}
+
+// Defensive fallback for the PENGELUARAN sheet's column headers only (part
+// of Issue #1's "perbaiki mapping ... nominal" fix): SheetJS's
+// sheet_to_json() keys each row object by the EXACT header cell text, so a
+// real-world file whose header has different case/extra spaces ("NOMINAL",
+// "Nominal ", "nominal (Rp)") would silently read as undefined -> '' with a
+// plain `r['Nominal']` lookup, which is indistinguishable downstream from a
+// genuinely empty cell. This only adds a case/whitespace-tolerant fallback
+// AFTER an exact match fails — it never changes behavior for a file whose
+// headers already match exactly (the common case), and is scoped to the
+// PENGELUARAN sheet only, per the user's "IMPORT PENGELUARAN" scope.
+function pickCell(row, name) {
+  if (row[name] !== undefined) return row[name];
+  const target = name.trim().toLowerCase();
+  const key = Object.keys(row).find((k) => k.trim().toLowerCase() === target);
+  return key !== undefined ? row[key] : '';
 }
 
 function toNum(v) {
@@ -460,9 +581,9 @@ async function handleWorkbook(file) {
         if (isBlankRow(r)) return;
         n++;
         categories.pengeluaran.push({
-          owner: String(r['Owner'] ?? '').trim(), tanggal: normalizeDateCell(r['Tanggal']),
-          jenis: String(r['Jenis Pengeluaran'] ?? '').trim(), keterangan: String(r['Keterangan'] ?? '').trim(),
-          nominal: r['Nominal']
+          owner: String(pickCell(r, 'Owner') ?? '').trim(), tanggal: normalizeDateCell(pickCell(r, 'Tanggal')),
+          jenis: String(pickCell(r, 'Jenis Pengeluaran') ?? '').trim(), keterangan: String(pickCell(r, 'Keterangan') ?? '').trim(),
+          nominal: pickCell(r, 'Nominal')
         });
       });
       if (n) sheetCounts['PENGELUARAN'] = n;
@@ -530,10 +651,20 @@ function renderSheetCountSummary(sheetCounts) {
   const present = SHEET_LABEL_ORDER.filter((label) => sheetCounts && sheetCounts[label]);
   if (!present.length) return '';
   const lines = present.map((label) => `${label.padEnd(13, ' ')}: ${sheetCounts[label]} data`);
+  // Dark Mode fix (scoped to this block only, per the user's explicit
+  // request): the old inline style used `var(--surface-2, #f4f4f5)`, but
+  // `--surface-2` is not a real token anywhere in theme.css — every browser
+  // always falls through to the hardcoded light-gray fallback regardless of
+  // theme, while the text color was left unset and inherited the ambient
+  // near-white `--color-text-high` in dark mode, producing illegible white-
+  // on-light-gray text. Fixed by using the real theme tokens (already used
+  // this way throughout style.css) with an explicit paired text color, so
+  // both the background AND the text correctly swap between Light
+  // ("Brotherhood") and Dark ("Sovereign Slate") themes.
   return `
     <div class="card mb-16">
       <h3 class="mb-8">Ringkasan Data per Sheet</h3>
-      <pre style="background:var(--surface-2, #f4f4f5);padding:12px 16px;border-radius:8px;font-family:inherit;line-height:1.6;margin:0">${escapeHtml(lines.join('\n'))}</pre>
+      <pre style="background:var(--color-surface-muted);color:var(--color-text-high);padding:12px 16px;border-radius:8px;font-family:inherit;line-height:1.6;margin:0">${escapeHtml(lines.join('\n'))}</pre>
     </div>
   `;
 }
@@ -565,7 +696,7 @@ function renderCategoryPreviewTable(module, cat) {
               const text = c.money ? formatCurrency(v) : escapeHtml(v ?? '-');
               return `<td class="${c.align === 'num' ? 'num' : ''}">${text}</td>`;
             }).join('')}
-            <td>${statusBadge(r)}${r.warning ? `<div class="hint" style="color:var(--status-warning-fg)">${escapeHtml(r.warning)}</div>` : ''}</td>
+            <td>${statusBadge(r)}${r.warning ? `<div class="hint" style="color:var(--status-warning-fg)">${escapeHtml(r.warning)}</div>` : ''}${r.status === 'error' && CATEGORY_EDIT_FIELDS[module] ? `<div class="mt-4"><button type="button" class="btn btn-outline btn-sm" data-edit-row="${module}::${r.row}">${icon('edit', 13)} Edit</button></div>` : ''}</td>
           </tr>`).join('')}
         </tbody>
       </table></div>
@@ -613,6 +744,12 @@ async function runPreview() {
   // single-module wizard already relied on (a second/double click has
   // nothing left to click).
   document.getElementById('wiz-confirm').addEventListener('click', () => { wiz.step = 3; renderStepBody(); runConfirm(); });
+  root.querySelectorAll('[data-edit-row]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const [m, rowNumStr] = btn.dataset.editRow.split('::');
+      openEditRowModal(m, Number(rowNumStr));
+    });
+  });
 }
 
 // ---- Step 4: Confirm --------------------------------------------------------

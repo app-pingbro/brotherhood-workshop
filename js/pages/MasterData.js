@@ -22,7 +22,7 @@ import {
   openModal, closeModal, confirmDialog, MONTHS_ID, formatPeriodLabel
 } from '../ui.js';
 import { icon } from '../icons.js';
-import { getLookups, setLookups, setCurrentPeriodId } from '../state.js';
+import { getLookups, setLookups } from '../state.js';
 import { PRICE_CATEGORY } from '../config.js';
 
 const TABS = [
@@ -309,27 +309,43 @@ function fileToBase64(file) {
 }
 
 // ---------------------------------------------------------------------------
-// Reset Data Transaksi ("Zona Berbahaya") — Pengaturan > Sistem. Wipes every
-// operational/transaction row (Jahit, Sablon, Gaji Jahit/Sablon/Harian,
-// Lembur, Kasbon & Potongan, Pengeluaran, Periode, Slip Gaji, Saldo/Balance,
-// Log Aktivitas) via backend/Reset.gs's api_resetTransactionData — Settings/
-// Master Data/User/Login are never touched (enforced server-side, this UI
-// only drives the confirmation flow). Backend takes a full spreadsheet
-// backup to Drive BEFORE deleting anything, and the whole action requires
-// the ADMIN_OWNER role.
+// Reset Data Transaksi ("Zona Berbahaya") — Pengaturan > Sistem. Lets the
+// user pick WHICH categories to wipe (Jahit, Sablon, Gaji Jahit, Gaji
+// Sablon, Gaji Harian, Lembur, Kasbon, Pengeluaran, or "Pilih Semua" of
+// those 8) via backend/Reset.gs's api_resetTransactionData — selecting only
+// Jahit deletes only Jahit; every other category (including Periode, Saldo/
+// Balance, Slip Gaji and Log Aktivitas, which are no longer part of this
+// feature at all) is left completely untouched. Settings/Master Data/User/
+// Login are never touched either way (enforced server-side, this UI only
+// drives the selection + confirmation flow). Backend takes a full
+// spreadsheet backup to Drive BEFORE deleting anything, and the whole
+// action requires the ADMIN_OWNER role.
 //
-// Flow (per spec): tombol -> preview jumlah data per kategori -> centang
-// "Saya memahami..." + ketik RESET -> Proses Reset -> hasil + link backup.
+// Flow: tombol -> pilih kategori (jumlah data per kategori ditampilkan) ->
+// centang "Saya memahami..." + ketik RESET -> Proses Reset -> hasil + link
+// backup.
 // ---------------------------------------------------------------------------
+const RESET_CATEGORIES = [
+  { key: 'jahit', label: 'Jahit', sheetKey: 'SEWING_TRANSACTIONS' },
+  { key: 'sablon', label: 'Sablon', sheetKey: 'PRINTING_TRANSACTIONS' },
+  { key: 'gaji_jahit', label: 'Gaji Jahit', sheetKey: 'SEWING_WORKER_PAYMENTS' },
+  { key: 'gaji_sablon', label: 'Gaji Sablon', sheetKey: 'PRINTING_WORKER_PAYMENTS' },
+  { key: 'gaji_harian', label: 'Gaji Harian', sheetKey: 'DAILY_WORKER_PAYMENTS' },
+  { key: 'lembur', label: 'Lembur', sheetKey: 'OVERTIME' },
+  { key: 'kasbon', label: 'Kasbon', sheetKey: 'PAYROLL_DEDUCTIONS' },
+  { key: 'pengeluaran', label: 'Pengeluaran', sheetKey: 'EXPENSES' }
+];
+
 function renderDangerZoneCard() {
   const card = document.getElementById('md-danger-zone');
   if (!card) return;
   card.innerHTML = `
     <h3 class="mb-8" style="color:var(--status-critical-fg)">${icon('alert', 18)} Zona Berbahaya</h3>
     <p class="text-low mb-8">
-      Menghapus permanen seluruh data transaksi (Jahit, Sablon, Gaji Jahit/Sablon/Harian, Lembur, Kasbon &amp; Potongan,
-      Pengeluaran, Periode, Slip Gaji, Saldo/Balance, Log Aktivitas) agar aplikasi kembali seperti baru.
-      Pengaturan Sistem, Logo &amp; Nama Perusahaan, Master Data, dan User/Login <strong>tidak terpengaruh</strong>.
+      Menghapus permanen data transaksi per kategori pilihan Anda: Jahit, Sablon, Gaji Jahit, Gaji Sablon, Gaji Harian, Lembur,
+      Kasbon, Pengeluaran &mdash; pilih satu, beberapa, atau semuanya. Kategori yang tidak dipilih tetap aman &amp; tidak tersentuh.
+      Pengaturan Sistem, Logo &amp; Nama Perusahaan, Master Data, User/Login, Periode, Saldo/Balance, Slip Gaji (Laporan), dan
+      Log Aktivitas <strong>tidak terpengaruh</strong> oleh fitur ini.
       Backup otomatis ke Google Drive dibuat sebelum data dihapus.
     </p>
     <button type="button" class="btn btn-danger" id="reset-open-btn">⚠️ Reset Data Transaksi</button>
@@ -338,6 +354,7 @@ function renderDangerZoneCard() {
 }
 
 function formatResetLines(categories, totalLabel, total) {
+  if (!categories.length) return `${totalLabel}: ${total} data`;
   const width = Math.max(...categories.map((c) => c.label.length), totalLabel.length) + 2;
   const lines = categories.map((c) => `${c.label.padEnd(width, ' ')}: ${c.count} data`);
   lines.push('─'.repeat(width + 8));
@@ -367,18 +384,32 @@ async function openResetWizard() {
 }
 
 function renderResetStep1(root, preview) {
-  const cats = (preview.categories || []).filter((c) => c.count > 0);
   const allCats = preview.categories || [];
-  const total = preview.total || 0;
+  const countFor = (sheetKey) => (allCats.find((c) => c.key === sheetKey) || {}).count || 0;
+  const items = RESET_CATEGORIES.map((c) => ({ ...c, count: countFor(c.sheetKey) }));
 
   root.innerHTML = `
     <div class="notice notice-critical mb-12">${icon('alert', 16)} Tindakan ini PERMANEN dan tidak dapat dibatalkan. Backup otomatis akan dibuat ke Google Drive sebelum data dihapus.</div>
-    <h4 class="mb-8">Data yang akan dihapus:</h4>
-    <pre style="background:var(--surface-2, #f4f4f5);padding:12px 16px;border-radius:8px;font-family:inherit;line-height:1.6;margin:0 0 12px;white-space:pre">${escapeHtml(formatResetLines(allCats, 'Total', total))}</pre>
-    ${total === 0 ? `<div class="notice notice-info mb-12">Tidak ada data transaksi untuk direset &mdash; aplikasi sudah kosong.</div>` : ''}
+    <h4 class="mb-8">Pilih kategori data yang ingin direset:</h4>
+    <label style="display:flex;gap:8px;align-items:center;cursor:pointer" class="mb-8">
+      <input type="checkbox" id="reset-select-all" />
+      <strong>Pilih Semua</strong>
+    </label>
+    <div class="table-wrap mb-8"><table class="data-table">
+      <thead><tr><th></th><th>Kategori</th><th class="num">Jumlah Data</th></tr></thead>
+      <tbody>${items.map((c) => `
+        <tr>
+          <td><input type="checkbox" class="reset-cat-check" data-cat="${c.key}" ${c.count === 0 ? 'disabled' : ''} /></td>
+          <td>${escapeHtml(c.label)}</td>
+          <td class="num">${c.count} data</td>
+        </tr>`).join('')}
+      </tbody>
+    </table></div>
+    <div id="reset-selected-total" class="text-low mb-12">Belum ada kategori dipilih.</div>
     <p class="text-low mb-12">
-      Data yang <strong>TETAP DIPERTAHANKAN</strong>: Pengaturan Sistem, Logo &amp; Nama Usaha, Data Owner, Master Harga,
-      Master Jenis Jahit, Master Jenis Sablon, Master Pekerja, User &amp; Login, Konfigurasi Aplikasi, Template Excel.
+      Data yang <strong>TETAP DIPERTAHANKAN</strong> (tidak pernah dihapus oleh fitur ini): Pengaturan Sistem, Logo &amp; Nama
+      Usaha, Data Owner, Master Harga, Master Jenis Jahit, Master Jenis Sablon, Master Pekerja, User &amp; Login, Konfigurasi
+      Aplikasi, Template Excel, Periode, Saldo/Balance Periode, Slip Gaji (Laporan), dan Log Aktivitas.
     </p>
     <label style="display:flex;gap:8px;align-items:flex-start;cursor:pointer" class="mb-8">
       <input type="checkbox" id="reset-ack" style="margin-top:3px" />
@@ -394,26 +425,49 @@ function renderResetStep1(root, preview) {
     </div>
   `;
 
+  const selectAll = root.querySelector('#reset-select-all');
+  const catChecks = Array.from(root.querySelectorAll('.reset-cat-check'));
   const ack = root.querySelector('#reset-ack');
   const textInput = root.querySelector('#reset-confirm-text');
   const proceedBtn = root.querySelector('#reset-proceed');
-  function updateEnabled() {
-    proceedBtn.disabled = !(total > 0 && ack.checked && textInput.value.trim() === 'RESET');
+  const totalLine = root.querySelector('#reset-selected-total');
+
+  function selectedKeys() {
+    return catChecks.filter((c) => c.checked && !c.disabled).map((c) => c.dataset.cat);
   }
+  function selectedTotal() {
+    return selectedKeys().reduce((sum, key) => sum + (items.find((i) => i.key === key)?.count || 0), 0);
+  }
+  function updateEnabled() {
+    const keys = selectedKeys();
+    const total = selectedTotal();
+    totalLine.textContent = keys.length ? `${keys.length} kategori dipilih — total ${total} data akan dihapus.` : 'Belum ada kategori dipilih.';
+    const selectableCount = catChecks.filter((c) => !c.disabled).length;
+    selectAll.checked = selectableCount > 0 && keys.length === selectableCount;
+    proceedBtn.disabled = !(keys.length > 0 && total > 0 && ack.checked && textInput.value.trim() === 'RESET');
+  }
+
+  selectAll.addEventListener('change', () => {
+    catChecks.forEach((c) => { if (!c.disabled) c.checked = selectAll.checked; });
+    updateEnabled();
+  });
+  catChecks.forEach((c) => c.addEventListener('change', updateEnabled));
   ack.addEventListener('change', updateEnabled);
   textInput.addEventListener('input', updateEnabled);
   root.querySelector('#reset-cancel').addEventListener('click', () => closeModal());
   proceedBtn.addEventListener('click', () => {
     if (proceedBtn.disabled) return; // guards a double-click
     proceedBtn.disabled = true;
-    runReset(root, ack.checked, textInput.value.trim());
+    runReset(root, ack.checked, textInput.value.trim(), selectedKeys());
   });
+
+  updateEnabled();
 }
 
-async function runReset(root, confirmUnderstood, confirmText) {
+async function runReset(root, confirmUnderstood, confirmText, categories) {
   root.innerHTML = `<div class="notice notice-info">${icon('alert', 15)} Membuat backup otomatis dan menghapus data transaksi... Mohon tunggu, jangan tutup halaman ini.</div>`;
 
-  const res = await postData('resetTransactionData', { confirm_understood: confirmUnderstood, confirm_text: confirmText });
+  const res = await postData('resetTransactionData', { confirm_understood: confirmUnderstood, confirm_text: confirmText, categories });
   if (!res.success) {
     root.innerHTML = `<div class="notice notice-critical">${icon('alert')} ${escapeHtml(res.message || 'Gagal mereset data.')}</div>
       <div class="form-actions"><button class="btn btn-secondary" id="reset-close">Tutup</button></div>`;
@@ -424,21 +478,17 @@ async function runReset(root, confirmUnderstood, confirmText) {
   const data = res.data;
   toast('Reset data transaksi berhasil.', 'success');
 
-  // A change this broad (every transaction/payroll/report list at once) is
+  // A change touching up to 8 different transaction/payroll lists at once is
   // simpler and safer to treat as "wipe every cache" than to enumerate each
-  // of the ~15 affected action names one by one — cache.js already exposes
-  // exactly this for cases like a reset.
+  // affected action name one by one — cache.js already exposes exactly this.
+  // Periode is never deleted by this feature anymore, so there is no stale
+  // current-period id to clear (unlike the old full-reset flow).
   invalidateAll();
-  // The previously-selected period no longer exists — clear it explicitly
-  // so the NEXT period created (there are none right now) is auto-selected
-  // cleanly instead of state.js's setPeriods() staying stuck on a stale id
-  // that happens to still be truthy.
-  setCurrentPeriodId(null);
   await refreshLookupsCache();
 
   root.innerHTML = `
-    <div class="notice" style="background:var(--status-success-bg);color:var(--status-success-fg)">${icon('check')} Reset selesai. Aplikasi kembali kosong &mdash; Pengaturan dan Master Data tetap tersimpan.</div>
-    <pre class="mt-12" style="background:var(--surface-2, #f4f4f5);padding:12px 16px;border-radius:8px;font-family:inherit;line-height:1.6;white-space:pre">${escapeHtml(formatResetLines(data.deletedCounts || [], 'Total dihapus', data.totalDeleted || 0))}</pre>
+    <div class="notice" style="background:var(--status-success-bg);color:var(--status-success-fg)">${icon('check')} Reset selesai untuk kategori terpilih. Kategori lain, Periode, Saldo, Slip Gaji, dan Log Aktivitas tidak tersentuh.</div>
+    <pre class="mt-12" style="background:var(--color-surface-muted);color:var(--color-text-high);padding:12px 16px;border-radius:8px;font-family:inherit;line-height:1.6;white-space:pre">${escapeHtml(formatResetLines(data.deletedCounts || [], 'Total dihapus', data.totalDeleted || 0))}</pre>
     <p class="mt-8 text-low">Backup otomatis: <strong>${escapeHtml(data.backup.name)}</strong> &mdash; <a href="${escapeHtml(data.backup.url)}" target="_blank" rel="noopener">buka di Google Drive</a>.</p>
     <div class="form-actions">
       <button type="button" class="btn btn-primary" id="reset-done">Selesai</button>
