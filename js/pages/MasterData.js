@@ -14,15 +14,15 @@
 //  - Users' password is only sent on create/explicit reset (non-empty
 //    field), matching the Users sheet's hash+salt storage model.
 // ============================================================================
-import { postData } from '../api.js';
-import { fetchSWR, peek, invalidate } from '../cache.js';
+import { fetchData, postData } from '../api.js';
+import { fetchSWR, peek, invalidate, invalidateAll } from '../cache.js';
 import { buildForm } from './_shared.js';
 import {
   formatCurrency, escapeHtml, badge, skeletonTable, emptyState, toast,
   openModal, closeModal, confirmDialog, MONTHS_ID, formatPeriodLabel
 } from '../ui.js';
 import { icon } from '../icons.js';
-import { getLookups, setLookups } from '../state.js';
+import { getLookups, setLookups, setCurrentPeriodId } from '../state.js';
 import { PRICE_CATEGORY } from '../config.js';
 
 const TABS = [
@@ -79,12 +79,12 @@ async function renderTab() {
   // silently refresh from the server (stale-while-revalidate).
   const cached = peek('getMaster', params);
   body.innerHTML = `
-    ${activeTab === 'settings' ? '<div class="card mb-16" id="md-company-info"></div>' : ''}
+    ${activeTab === 'settings' ? '<div class="card mb-16" id="md-company-info"></div><div class="card mb-16" id="md-danger-zone"></div>' : ''}
     <div class="page-header"><div></div><div class="page-header__actions"><button class="btn btn-primary" id="md-add">${icon('plus', 15)} Tambah ${escapeHtml(cfg.label)}</button></div></div>
     <div id="md-list">${cached === undefined ? skeletonTable(cfg.columns.length + 1, 5) : ''}</div>
   `;
   document.getElementById('md-add').addEventListener('click', () => openEntityForm(cfg, null));
-  if (activeTab === 'settings') renderCompanyInfoCard();
+  if (activeTab === 'settings') { renderCompanyInfoCard(); renderDangerZoneCard(); }
   if (cached !== undefined) renderList(cfg, cached || []);
 
   try {
@@ -305,6 +305,148 @@ function fileToBase64(file) {
     };
     reader.onerror = () => reject(reader.error || new Error('Gagal membaca file.'));
     reader.readAsDataURL(file);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Reset Data Transaksi ("Zona Berbahaya") — Pengaturan > Sistem. Wipes every
+// operational/transaction row (Jahit, Sablon, Gaji Jahit/Sablon/Harian,
+// Lembur, Kasbon & Potongan, Pengeluaran, Periode, Slip Gaji, Saldo/Balance,
+// Log Aktivitas) via backend/Reset.gs's api_resetTransactionData — Settings/
+// Master Data/User/Login are never touched (enforced server-side, this UI
+// only drives the confirmation flow). Backend takes a full spreadsheet
+// backup to Drive BEFORE deleting anything, and the whole action requires
+// the ADMIN_OWNER role.
+//
+// Flow (per spec): tombol -> preview jumlah data per kategori -> centang
+// "Saya memahami..." + ketik RESET -> Proses Reset -> hasil + link backup.
+// ---------------------------------------------------------------------------
+function renderDangerZoneCard() {
+  const card = document.getElementById('md-danger-zone');
+  if (!card) return;
+  card.innerHTML = `
+    <h3 class="mb-8" style="color:var(--status-critical-fg)">${icon('alert', 18)} Zona Berbahaya</h3>
+    <p class="text-low mb-8">
+      Menghapus permanen seluruh data transaksi (Jahit, Sablon, Gaji Jahit/Sablon/Harian, Lembur, Kasbon &amp; Potongan,
+      Pengeluaran, Periode, Slip Gaji, Saldo/Balance, Log Aktivitas) agar aplikasi kembali seperti baru.
+      Pengaturan Sistem, Logo &amp; Nama Perusahaan, Master Data, dan User/Login <strong>tidak terpengaruh</strong>.
+      Backup otomatis ke Google Drive dibuat sebelum data dihapus.
+    </p>
+    <button type="button" class="btn btn-danger" id="reset-open-btn">⚠️ Reset Data Transaksi</button>
+  `;
+  card.querySelector('#reset-open-btn').addEventListener('click', openResetWizard);
+}
+
+function formatResetLines(categories, totalLabel, total) {
+  const width = Math.max(...categories.map((c) => c.label.length), totalLabel.length) + 2;
+  const lines = categories.map((c) => `${c.label.padEnd(width, ' ')}: ${c.count} data`);
+  lines.push('─'.repeat(width + 8));
+  lines.push(`${totalLabel.padEnd(width, ' ')}: ${total} data`);
+  return lines.join('\n');
+}
+
+async function openResetWizard() {
+  openModal({
+    title: '⚠️ Reset Data Transaksi',
+    size: 'lg',
+    bodyHtml: '<div id="reset-wizard-root"><div class="notice notice-info">Memuat jumlah data...</div></div>',
+    onMount: async (body) => {
+      const root = body.querySelector('#reset-wizard-root');
+      let preview;
+      try {
+        preview = await fetchData('getResetPreview', {});
+      } catch (e) {
+        root.innerHTML = `<div class="notice notice-critical">${icon('alert')} Gagal memuat data: ${escapeHtml(e.message)}</div>
+          <div class="form-actions"><button class="btn btn-secondary" id="reset-close-err">Tutup</button></div>`;
+        root.querySelector('#reset-close-err').addEventListener('click', () => closeModal());
+        return;
+      }
+      renderResetStep1(root, preview);
+    }
+  });
+}
+
+function renderResetStep1(root, preview) {
+  const cats = (preview.categories || []).filter((c) => c.count > 0);
+  const allCats = preview.categories || [];
+  const total = preview.total || 0;
+
+  root.innerHTML = `
+    <div class="notice notice-critical mb-12">${icon('alert', 16)} Tindakan ini PERMANEN dan tidak dapat dibatalkan. Backup otomatis akan dibuat ke Google Drive sebelum data dihapus.</div>
+    <h4 class="mb-8">Data yang akan dihapus:</h4>
+    <pre style="background:var(--surface-2, #f4f4f5);padding:12px 16px;border-radius:8px;font-family:inherit;line-height:1.6;margin:0 0 12px;white-space:pre">${escapeHtml(formatResetLines(allCats, 'Total', total))}</pre>
+    ${total === 0 ? `<div class="notice notice-info mb-12">Tidak ada data transaksi untuk direset &mdash; aplikasi sudah kosong.</div>` : ''}
+    <p class="text-low mb-12">
+      Data yang <strong>TETAP DIPERTAHANKAN</strong>: Pengaturan Sistem, Logo &amp; Nama Usaha, Data Owner, Master Harga,
+      Master Jenis Jahit, Master Jenis Sablon, Master Pekerja, User &amp; Login, Konfigurasi Aplikasi, Template Excel.
+    </p>
+    <label style="display:flex;gap:8px;align-items:flex-start;cursor:pointer" class="mb-8">
+      <input type="checkbox" id="reset-ack" style="margin-top:3px" />
+      <span>Saya memahami bahwa data transaksi akan dihapus permanen</span>
+    </label>
+    <div class="field mb-12">
+      <label>Ketik <code>RESET</code> untuk mengonfirmasi</label>
+      <input type="text" class="input" id="reset-confirm-text" placeholder="RESET" autocomplete="off" />
+    </div>
+    <div class="form-actions">
+      <button type="button" class="btn btn-secondary" id="reset-cancel">Batal</button>
+      <button type="button" class="btn btn-danger" id="reset-proceed" disabled>Proses Reset</button>
+    </div>
+  `;
+
+  const ack = root.querySelector('#reset-ack');
+  const textInput = root.querySelector('#reset-confirm-text');
+  const proceedBtn = root.querySelector('#reset-proceed');
+  function updateEnabled() {
+    proceedBtn.disabled = !(total > 0 && ack.checked && textInput.value.trim() === 'RESET');
+  }
+  ack.addEventListener('change', updateEnabled);
+  textInput.addEventListener('input', updateEnabled);
+  root.querySelector('#reset-cancel').addEventListener('click', () => closeModal());
+  proceedBtn.addEventListener('click', () => {
+    if (proceedBtn.disabled) return; // guards a double-click
+    proceedBtn.disabled = true;
+    runReset(root, ack.checked, textInput.value.trim());
+  });
+}
+
+async function runReset(root, confirmUnderstood, confirmText) {
+  root.innerHTML = `<div class="notice notice-info">${icon('alert', 15)} Membuat backup otomatis dan menghapus data transaksi... Mohon tunggu, jangan tutup halaman ini.</div>`;
+
+  const res = await postData('resetTransactionData', { confirm_understood: confirmUnderstood, confirm_text: confirmText });
+  if (!res.success) {
+    root.innerHTML = `<div class="notice notice-critical">${icon('alert')} ${escapeHtml(res.message || 'Gagal mereset data.')}</div>
+      <div class="form-actions"><button class="btn btn-secondary" id="reset-close">Tutup</button></div>`;
+    root.querySelector('#reset-close').addEventListener('click', () => closeModal());
+    return;
+  }
+
+  const data = res.data;
+  toast('Reset data transaksi berhasil.', 'success');
+
+  // A change this broad (every transaction/payroll/report list at once) is
+  // simpler and safer to treat as "wipe every cache" than to enumerate each
+  // of the ~15 affected action names one by one — cache.js already exposes
+  // exactly this for cases like a reset.
+  invalidateAll();
+  // The previously-selected period no longer exists — clear it explicitly
+  // so the NEXT period created (there are none right now) is auto-selected
+  // cleanly instead of state.js's setPeriods() staying stuck on a stale id
+  // that happens to still be truthy.
+  setCurrentPeriodId(null);
+  await refreshLookupsCache();
+
+  root.innerHTML = `
+    <div class="notice" style="background:var(--status-success-bg);color:var(--status-success-fg)">${icon('check')} Reset selesai. Aplikasi kembali kosong &mdash; Pengaturan dan Master Data tetap tersimpan.</div>
+    <pre class="mt-12" style="background:var(--surface-2, #f4f4f5);padding:12px 16px;border-radius:8px;font-family:inherit;line-height:1.6;white-space:pre">${escapeHtml(formatResetLines(data.deletedCounts || [], 'Total dihapus', data.totalDeleted || 0))}</pre>
+    <p class="mt-8 text-low">Backup otomatis: <strong>${escapeHtml(data.backup.name)}</strong> &mdash; <a href="${escapeHtml(data.backup.url)}" target="_blank" rel="noopener">buka di Google Drive</a>.</p>
+    <div class="form-actions">
+      <button type="button" class="btn btn-primary" id="reset-done">Selesai</button>
+    </div>
+  `;
+  root.querySelector('#reset-done').addEventListener('click', () => {
+    closeModal();
+    location.hash = '#/dashboard';
   });
 }
 
