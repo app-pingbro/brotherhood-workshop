@@ -37,10 +37,10 @@
 // `categories` map — no backend action was added for Pengeluaran).
 // ============================================================================
 import { fetchData, postData } from '../api.js';
-import { invalidate, invalidatePrefix } from '../cache.js';
+import { fetchSWR, invalidate, invalidatePrefix } from '../cache.js';
 import { formatCurrency, escapeHtml, toast, badge, formatPeriodLabel, openModal, closeModal } from '../ui.js';
 import { icon } from '../icons.js';
-import { getCurrentPeriod, getLookups } from '../state.js';
+import { getCurrentPeriod, getLookups, setLookups } from '../state.js';
 import { DEDUCTION_TYPES } from '../config.js';
 import { buildForm } from './_shared.js';
 
@@ -312,12 +312,21 @@ function isBlankRow(r) {
 // plain `r['Nominal']` lookup, which is indistinguishable downstream from a
 // genuinely empty cell. This only adds a case/whitespace-tolerant fallback
 // AFTER an exact match fails — it never changes behavior for a file whose
-// headers already match exactly (the common case), and is scoped to the
-// PENGELUARAN sheet only, per the user's "IMPORT PENGELUARAN" scope.
+// headers already match exactly (the common case).
+//
+// Also used by the KASBON sheet's 4 column reads (Feature E, Issue #2
+// lanjutan — "KASBON TIDAK MASUK" persisting after the toNum() fix), where
+// headers like "Kasbon (PINGBRO)" commonly show up in a real user's own
+// file as "KASBON (PINGBRO)", "Kasbon(PINGBRO)" with NO space before the
+// parenthesis, "Kasbon  (PINGBRO)" with extra spaces, etc. The normalize()
+// step below collapses any run of whitespace to a single space AND strips
+// whitespace immediately touching "(" / ")", so all of the variants above
+// compare equal to the canonical header — not just a case-insensitive trim.
 function pickCell(row, name) {
   if (row[name] !== undefined) return row[name];
-  const target = name.trim().toLowerCase();
-  const key = Object.keys(row).find((k) => k.trim().toLowerCase() === target);
+  const normalize = (s) => String(s).trim().toLowerCase().replace(/\s+/g, ' ').replace(/\s*([()])\s*/g, '$1');
+  const target = normalize(name);
+  const key = Object.keys(row).find((k) => normalize(k) === target);
   return key !== undefined ? row[key] : '';
 }
 
@@ -619,10 +628,27 @@ async function handleWorkbook(file) {
         // unused (kept in the template for the user's own reference) — each
         // bucket's own fixed Keterangan is what tells the backend which kind
         // of deduction it is (see backend/ExcelImport.gs mapDeductionJenis_).
-        const pekerja = String(r['Pekerja'] ?? '').trim();
-        const pingbro = toNum(r['Kasbon (PINGBRO)']);
-        const sunrise = toNum(r['Kasbon (SUNRISE)']);
-        const hutang = toNum(r['Hutang Cicilan']);
+        //
+        // Root cause of Issue #2 continuing after the toNum() fix ("KASBON
+        // TIDAK MASUK"): a plain `r['Kasbon (PINGBRO)']` lookup only matches
+        // when the Excel header is byte-for-byte identical — a real user's
+        // own file (not the downloaded template) commonly has a slightly
+        // different header ("KASBON (PINGBRO)", "Kasbon(PINGBRO)" with no
+        // space, a trailing space, etc). When that happens the lookup is
+        // `undefined`, toNum(undefined) is 0, the `> 0` gate never fires, and
+        // the row is dropped with NO error anywhere — this sheet's own
+        // "Ringkasan Data per Sheet" count still shows it had N rows (that
+        // count is taken before this column lookup), which is exactly the
+        // "Excel sudah berisi data ... tetapi setelah import data tidak
+        // masuk" symptom, with no clue as to why. pickCell (already used for
+        // PENGELUARAN's Nominal column, Issue #1's fix in an earlier turn)
+        // is now applied here too: it falls back to a case/whitespace-
+        // tolerant header match only when the exact key is missing, so a
+        // file whose headers already match exactly behaves identically.
+        const pekerja = String(pickCell(r, 'Pekerja') ?? '').trim();
+        const pingbro = toNum(pickCell(r, 'Kasbon (PINGBRO)'));
+        const sunrise = toNum(pickCell(r, 'Kasbon (SUNRISE)'));
+        const hutang = toNum(pickCell(r, 'Hutang Cicilan'));
         if (pingbro > 0) categories.kasbon.push({ pekerja, jenis: 'Kasbon', nominal: pingbro, keterangan: 'Kasbon (PINGBRO)' });
         if (sunrise > 0) categories.kasbon.push({ pekerja, jenis: 'Kasbon', nominal: sunrise, keterangan: 'Kasbon (SUNRISE)' });
         if (hutang > 0) categories.kasbon.push({ pekerja, jenis: 'Potongan Lain', nominal: hutang, keterangan: 'Hutang Cicilan' });
@@ -841,6 +867,29 @@ async function runConfirm() {
   invalidate('getMonthlyRecap');
   invalidatePrefix('dashRecent');
   invalidatePrefix('dashTrend');
+
+  // Bug #3 fix (Pengeluaran: kolom Jenis masih "-" setelah import): kalau
+  // kategori pengeluaran punya baris yang diimpor, backend
+  // (resolveOrCreateExpenseType_ di Expenses.gs) mungkin BARU SAJA membuat
+  // baris EXPENSE_TYPES untuk Jenis Pengeluaran ketik-bebas yang belum
+  // pernah ada sebelumnya. Snapshot getLookups() di client (TTL 30 menit,
+  // lihat state.js/router.js) belum tahu soal baris baru itu — akibatnya
+  // halaman Pengeluaran (nameOf() di Pengeluaran.js, cari expense_type_id
+  // di lookups.expenseTypes) jatuh ke fallback "-" untuk baris yang baru
+  // saja diimpor, walau datanya sudah benar tersimpan di server. Refresh
+  // paksa lookups di sini (pola sama seperti MasterData.js) supaya cache
+  // client langsung sinkron begitu import selesai — tidak bisa import
+  // refreshLookups() dari router.js langsung karena router.js sendiri
+  // meng-import ImportExcel.js (circular import), jadi pola
+  // fetchSWR+setLookups-nya direplikasi di sini. Hanya dijalankan kalau
+  // kategori pengeluaran benar-benar ada baris yang diimpor, supaya import
+  // yang tidak menyentuh Pengeluaran tidak melakukan refetch lookups yang
+  // tidak perlu.
+  if (wiz.categories && wiz.categories.pengeluaran && wiz.categories.pengeluaran.length) {
+    try {
+      await fetchSWR('getLookups', {}, (fresh) => setLookups(fresh || {}), { force: true });
+    } catch (e) { /* non-fatal — lookups tetap akan ter-refresh otomatis lewat TTL/reload berikutnya */ }
+  }
 
   const touchedDefs = Object.keys(data.saved || {}).map((m) => CATEGORY_DEFS[m]).filter(Boolean);
   // De-duplicate result links (gaji_harian and lembur point at the same page).

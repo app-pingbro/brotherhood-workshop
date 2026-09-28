@@ -191,13 +191,21 @@ function buildMatrixRows(recap) {
     row('Omzet Jahit', { pingbro: P.jahit, sunrise: S.jahit, brotherhood: B.jahit, gabungan: (P.jahit||0)+(S.jahit||0)+(B.jahit||0) }),
     row('Omzet Sablon', { pingbro: P.sablon, sunrise: S.sablon, brotherhood: B.sablon, gabungan: (P.sablon||0)+(S.sablon||0)+(B.sablon||0) }),
     row('Total Pemasukan', { pingbro: P.pemasukan, sunrise: S.pemasukan, brotherhood: B.pemasukan, gabungan: recap.totalPemasukan, emphasize: true }),
+    // Baris "Rincian Gaji & Lembur" di bawah ini BERSIFAT INFORMASI SAJA —
+    // gaji & lembur sudah tercatat sebagai baris Pengeluaran (dibayar oleh
+    // Owner PINGBRO/SUNRISE), sehingga TIDAK ikut dijumlahkan lagi ke
+    // "Total Biaya" (lihat computeRecapForPeriod_ di Rekap.gs). Baris ini
+    // sengaja tidak punya nilai "Gabungan" ikut ke Total Biaya di bawah,
+    // supaya tidak terlihat seperti dihitung dua kali.
+    row('Rincian Gaji & Lembur (informasi — sudah tercatat di Pengeluaran, tidak dihitung ulang)'),
     row('Gaji Jahit Borongan', { bersama: gaji.gajiJahit, gabungan: gaji.gajiJahit }),
     row('Gaji Sablon Borongan', { bersama: gaji.gajiSablon, gabungan: gaji.gajiSablon }),
     row('Gaji Harian', { bersama: gaji.gajiHarian, gabungan: gaji.gajiHarian }),
     row('Gaji Minggu', { bersama: gaji.gajiMinggu, gabungan: gaji.gajiMinggu }),
     row('Lembur', { bersama: gaji.lembur, gabungan: gaji.lembur }),
+    row('Total Gaji & Lembur (informasi)', { bersama: gajiTotal, gabungan: gajiTotal }),
     row('Pengeluaran', { pingbro: pengeluaran.pingbro, sunrise: pengeluaran.sunrise, brotherhood: null, gabungan: pengeluaranTotal }),
-    row('Total Biaya', { bersama: gajiTotal, gabungan: recap.totalBiaya, emphasize: true }),
+    row('Total Biaya (= Pengeluaran PINGBRO + SUNRISE)', { gabungan: recap.totalBiaya, emphasize: true }),
     row('Hasil Bulan', { gabungan: recap.hasilBulan, emphasize: true })
   ];
 }
@@ -219,7 +227,7 @@ function renderMatrix(recap) {
       </tr>`).join('')}
     </tbody>
   </table></div>
-  <p class="subtitle mt-8">Gaji dibayar dari tenaga kerja bersama (shared labor pool) sehingga tidak dapat diatribusikan ke satu Owner — selalu tampil di kolom Biaya Bersama. Pengeluaran hanya berlaku untuk PINGBRO &amp; SUNRISE (BROTHERHOOD tidak menanggung Pengeluaran operasional).</p>`;
+  <p class="subtitle mt-8">Gaji &amp; Lembur dibayar dari tenaga kerja bersama (shared labor pool) sehingga tidak dapat diatribusikan ke satu Owner — selalu tampil di kolom Biaya Bersama sebagai rincian informasi. Gaji &amp; Lembur sudah tercatat sebagai baris Pengeluaran (dibayar oleh Owner PINGBRO/SUNRISE) sehingga <strong>tidak dijumlahkan lagi</strong> ke "Total Biaya" — Total Biaya = Pengeluaran PINGBRO + SUNRISE saja, agar tidak dihitung dua kali. Pengeluaran hanya berlaku untuk PINGBRO &amp; SUNRISE (BROTHERHOOD tidak menanggung Pengeluaran operasional).</p>`;
 }
 
 function renderKoreksiForm(period) {
