@@ -321,9 +321,64 @@ function pickCell(row, name) {
   return key !== undefined ? row[key] : '';
 }
 
+// Root cause of Issue #2 ("KASBON TIDAK MASUK"): toNum() used to be a plain
+// Number(v), which reads Indonesian dot-grouped currency text wrong for any
+// amount with 2+ thousand-separator dots — Number('500.000') -> 500 (the
+// dot is misread as a decimal point) and Number('1.500.000') -> NaN -> 0
+// (more than one dot is simply not a valid JS number literal at all). Since
+// the KASBON sheet's Kasbon (PINGBRO)/Kasbon (SUNRISE)/Hutang Cicilan
+// columns are only pushed into categories.kasbon when their value is > 0,
+// a genuine Kasbon amount like "1.500.000" silently became 0 and the whole
+// row was dropped with no error shown anywhere — exactly the reported
+// symptom. This mirrors backend/ExcelImport.gs's parseExcelCurrency_ (same
+// Indonesian/European "." thousands vs US "," thousands disambiguation,
+// same actual-decimal-vs-thousands-group heuristic) so both sides agree on
+// every value, ported to plain client-side JS. The name/signature is kept
+// identical so every existing call site (Kasbon's 3 amount columns, Gaji
+// Harian's Jumlah Jam Lembur spin-off check) benefits with no other change.
 function toNum(v) {
-  const n = Number(v);
-  return isFinite(n) ? n : 0;
+  if (v === '' || v === null || v === undefined) return 0;
+  if (typeof v === 'number') return isFinite(v) ? v : 0;
+
+  let s = String(v).trim();
+  if (!s) return 0;
+  // Strip everything except digits, '.', ',', '-' (drops "Rp", "IDR", spaces, etc).
+  s = s.replace(/[^\d,.\-]/g, '');
+  if (!s) return 0;
+
+  const negative = s.charAt(0) === '-';
+  if (negative) s = s.slice(1);
+  if (!s) return 0;
+
+  const hasDot = s.indexOf('.') !== -1;
+  const hasComma = s.indexOf(',') !== -1;
+  let n;
+
+  if (hasDot && hasComma) {
+    const lastDot = s.lastIndexOf('.');
+    const lastComma = s.lastIndexOf(',');
+    if (lastComma > lastDot) {
+      // Indonesian/European: '.' thousands, ',' decimal -> "1.500.000,50"
+      s = s.replace(/\./g, '').replace(',', '.');
+    } else {
+      // US: ',' thousands, '.' decimal -> "1,500,000.50"
+      s = s.replace(/,/g, '');
+    }
+    n = parseFloat(s);
+  } else if (hasDot) {
+    const dotParts = s.split('.');
+    const allGroupsOf3 = dotParts.length > 1 && dotParts.slice(1).every((p) => p.length === 3);
+    n = parseFloat(allGroupsOf3 ? dotParts.join('') : s);
+  } else if (hasComma) {
+    const commaParts = s.split(',');
+    const allGroupsOf3C = commaParts.length > 1 && commaParts.slice(1).every((p) => p.length === 3);
+    n = parseFloat(allGroupsOf3C ? commaParts.join('') : s.replace(',', '.'));
+  } else {
+    n = parseFloat(s);
+  }
+
+  if (isNaN(n)) return 0;
+  return negative ? -n : n;
 }
 
 // Accepts a JS Date (if SheetJS ever returns one), an Excel serial date

@@ -49,20 +49,47 @@ export async function renderCrudPage(container, opts) {
     <div id="crud-extra"></div>
   `;
 
+  // Bug 3/4 fix ("Gaji Harian & Lembur infinite loading" / "bug pindah
+  // tools"): every element this function touches is looked up ONCE here,
+  // scoped to THIS call's own `container` (not the global `document`), and
+  // reused via these stable references from then on. Root cause: the old
+  // code used `document.getElementById('crud-list')` etc. everywhere — a
+  // global lookup that always resolves to the FIRST matching id in the
+  // whole page. That silently broke in two ways: (a) when two
+  // renderCrudPage() instances render on the SAME page (GajiHarian.js's
+  // Gaji Harian + Lembur sections both use these ids), the second
+  // instance's async data would get written into the FIRST instance's DOM,
+  // leaving the second section's own element stuck on its initial loading
+  // skeleton forever; (b) when navigating between pages, a still-in-flight
+  // fetch from the PREVIOUS page could resolve after the new page mounted
+  // and momentarily overwrite the new page's content. Scoping to
+  // `container.querySelector` fixes (a); the `.isConnected` guards below
+  // (added to `load()`'s `apply()`, and to the post-save/post-delete
+  // continuations) fix (b) — router.js clears `container.innerHTML` on
+  // navigation, which detaches these captured elements from the document,
+  // so a stale callback's write becomes a harmless no-op instead of a
+  // visible flash of old content. No data fetching, validation, or save
+  // logic changes anywhere below — only WHERE results get painted.
+  const lockEl = container.querySelector('#crud-lock');
+  const actionsEl = container.querySelector('#crud-actions');
+  const filtersEl = container.querySelector('#crud-filters');
+  const listRootEl = container.querySelector('#crud-list');
+  const extraEl = container.querySelector('#crud-extra');
+
   const period = getCurrentPeriod();
   const isClosed = period && String(period.status || '').toLowerCase() === 'closed';
   const canWrite = opts.periodRequired === false ? true : Boolean(period) && !isClosed;
 
   if (!period) {
-    document.getElementById('crud-lock').style.display = 'flex';
-    document.getElementById('crud-lock').innerHTML = `${icon('alert')} Pilih periode terlebih dahulu di bagian atas untuk melihat dan menambah data.`;
+    lockEl.style.display = 'flex';
+    lockEl.innerHTML = `${icon('alert')} Pilih periode terlebih dahulu di bagian atas untuk melihat dan menambah data.`;
   } else if (isClosed && opts.periodRequired !== false) {
-    document.getElementById('crud-lock').style.display = 'flex';
-    document.getElementById('crud-lock').innerHTML = `${icon('lock')} Periode <strong>${escapeHtml(formatPeriodLabel(period))}</strong> berstatus <strong>CLOSED</strong> &mdash; data hanya bisa dilihat. Buka kembali periode ini dari Rekap Bulanan untuk mengedit.`;
+    lockEl.style.display = 'flex';
+    lockEl.innerHTML = `${icon('lock')} Periode <strong>${escapeHtml(formatPeriodLabel(period))}</strong> berstatus <strong>CLOSED</strong> &mdash; data hanya bisa dilihat. Buka kembali periode ini dari Rekap Bulanan untuk mengedit.`;
   }
 
   // Header action(s)
-  const actions = document.getElementById('crud-actions');
+  const actions = actionsEl;
   if (opts.canAdd !== false) {
     const addBtn = document.createElement('button');
     addBtn.className = 'btn btn-primary';
@@ -75,7 +102,7 @@ export async function renderCrudPage(container, opts) {
 
   // Local filters
   if ((opts.localFilters || []).length) {
-    const filterRoot = document.getElementById('crud-filters');
+    const filterRoot = filtersEl;
     filterRoot.innerHTML = `<div class="form-grid">${opts.localFilters.map((f) => `
       <div class="field">
         <label>${escapeHtml(f.label)}</label>
@@ -101,7 +128,13 @@ export async function renderCrudPage(container, opts) {
   // actually changed shape. First-ever load (or right after a save/delete,
   // which forces a fresh fetch) still shows the skeleton while it waits.
   async function load({ force = false } = {}) {
-    const listRoot = document.getElementById('crud-list');
+    // Stale guard (Bug 4): this renderCrudPage instance's own page may have
+    // already been navigated away from (e.g. load() was queued by a filter
+    // change or a post-save refresh right as the user switched tools) — if
+    // its captured list element is no longer attached to the document,
+    // there is nothing left on screen to update, so skip the work entirely.
+    if (!listRootEl.isConnected) return;
+    const listRoot = listRootEl;
     if (!period) {
       listRoot.innerHTML = emptyState('Belum ada periode dipilih', 'Gunakan selector periode di kanan atas.', '\u{1F4C5}');
       return;
@@ -109,10 +142,15 @@ export async function renderCrudPage(container, opts) {
     const params = { ...(opts.listParams ? opts.listParams() : {}), ...localFilterValues };
 
     function apply(data) {
+      // Same stale guard, for the async completion specifically: this is
+      // the exact callback that used to overwrite a DIFFERENT (first-match)
+      // or a NO-LONGER-VISIBLE element — see the comment above the element
+      // lookups near the top of renderCrudPage.
+      if (!listRootEl.isConnected) return;
       rows = Array.isArray(data) ? data : (data && data.items) || [];
       if (opts.onRowsLoaded) opts.onRowsLoaded(rows);
       renderTable(rows);
-      if (opts.renderExtra) opts.renderExtra(document.getElementById('crud-extra'), rows);
+      if (opts.renderExtra) opts.renderExtra(extraEl, rows);
     }
 
     const cached = peek(opts.listAction, params);
@@ -122,7 +160,7 @@ export async function renderCrudPage(container, opts) {
     try {
       await fetchSWR(opts.listAction, params, apply, { force });
     } catch (e) {
-      if (cached === undefined) {
+      if (cached === undefined && listRootEl.isConnected) {
         listRoot.innerHTML = `<div class="notice notice-critical">${icon('alert')} Gagal memuat data: ${escapeHtml(e.message)}</div>`;
       }
       // if we had cached data on screen already, keep showing it and let the
@@ -132,7 +170,7 @@ export async function renderCrudPage(container, opts) {
   }
 
   function renderTable(list) {
-    const listRoot = document.getElementById('crud-list');
+    const listRoot = listRootEl;
     if (!list.length) {
       listRoot.innerHTML = emptyState(opts.emptyTitle || 'Belum ada data', opts.emptyHint || 'Tambahkan data baru untuk periode ini.', opts.emptyIcon);
       return;
@@ -176,12 +214,19 @@ export async function renderCrudPage(container, opts) {
     if (!ok) return;
     const res = await postData(opts.deleteAction, { id: row.id });
     if (res.success) {
-      toast('Data berhasil dihapus.', 'success');
+      // Cache invalidation is real backend/state bookkeeping, not a DOM
+      // write — always run it regardless of whether the user has since
+      // navigated away, so other pages/caches stay correct.
       invalidate(opts.listAction);
       invalidate('getMonthlyRecap'); // deletions change totals shown on Dashboard/Rekap Bulanan
       invalidate('getSalarySlip'); // payroll/Kasbon edits change Slip Gaji too
       invalidatePrefix('dashRecent'); // Dashboard's merged Jahit+Sablon "recent" cache
       invalidatePrefix('dashTrend'); // Dashboard's per-period trend cache
+      // Stale guard (Bug 4): the delete's own request can outlive the page
+      // it was started from if the user switches tools while it's in
+      // flight — skip the toast/re-render if that page is no longer on screen.
+      if (!listRootEl.isConnected) return;
+      toast('Data berhasil dihapus.', 'success');
       load({ force: true });
     }
   }
@@ -213,13 +258,21 @@ export async function renderCrudPage(container, opts) {
           submitBtn.disabled = false;
           submitBtn.textContent = mode === 'edit' ? 'Simpan Perubahan' : 'Simpan';
           if (res.success) {
-            toast('Data berhasil disimpan.', 'success');
             closeModal();
+            // Cache invalidation is real backend/state bookkeeping, not a
+            // DOM write — always run it regardless of whether the user has
+            // since navigated away, so other pages/caches stay correct.
             invalidate(opts.listAction);
             invalidate('getMonthlyRecap'); // saves change totals shown on Dashboard/Rekap Bulanan
             invalidate('getSalarySlip'); // payroll/Kasbon edits change Slip Gaji too
             invalidatePrefix('dashRecent');
             invalidatePrefix('dashTrend');
+            // Stale guard (Bug 4): the save's own request can outlive the
+            // page it was started from if the user switches tools while it's
+            // in flight — skip the toast/re-render if that page is no
+            // longer on screen (the modal is already closed above either way).
+            if (!listRootEl.isConnected) return;
+            toast('Data berhasil disimpan.', 'success');
             load({ force: true });
           } else if (res.fieldErrors) {
             applyFieldErrors(formRoot, res.fieldErrors);
@@ -229,7 +282,6 @@ export async function renderCrudPage(container, opts) {
     });
   }
 
-  document.getElementById('crud-list');
   await load();
 }
 
