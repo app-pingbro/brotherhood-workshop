@@ -370,3 +370,57 @@ table.data-table { width: 100%; border-collapse: collapse; min-width: 640px; }
 input[type="number"] { -moz-appearance: textfield; }
 input[type="number"]::-webkit-outer-spin-button,
 input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+
+/* ---------------------------------------------------------------------- */
+/* Dashboard — progress indicators + operational activity feed             */
+/* (Feature F #2: replaces the old "Tren Hasil Bulan" chart card and       */
+/* "Transaksi Terbaru" table card with summary/status-driven sections.)    */
+/* All colors reuse existing tokens, so light/dark mode need no changes    */
+/* here — see theme.css for both palettes.                                */
+/* ---------------------------------------------------------------------- */
+.progress-track {
+  height: 8px; border-radius: 999px; background: var(--color-surface-muted);
+  overflow: hidden;
+}
+.progress-fill {
+  height: 100%; border-radius: 999px; background: var(--color-primary);
+  transition: width .3s ease;
+}
+.progress-fill--warning { background: var(--color-orange); }
+.progress-fill--critical { background: var(--color-red); }
+.progress-label {
+  display: flex; justify-content: space-between; gap: 8px;
+  font-size: 11.5px; color: var(--color-text-medium); margin-top: 6px;
+}
+
+.mini-stat-row { display: flex; gap: 10px; flex-wrap: wrap; }
+.mini-stat {
+  flex: 1 1 120px; background: var(--color-surface-muted);
+  border-radius: var(--radius-md, 10px); padding: 10px 12px;
+}
+.mini-stat .label {
+  font-size: 11px; color: var(--color-text-low); font-weight: 700;
+  text-transform: uppercase; letter-spacing: .03em;
+}
+.mini-stat .value { font-family: var(--font-display); font-size: 16px; font-weight: 800; margin-top: 4px; }
+
+.activity-list { display: flex; flex-direction: column; }
+.activity-item {
+  display: flex; align-items: center; gap: 10px; padding: 10px 2px;
+  border-bottom: 1px solid var(--color-border);
+}
+.activity-item:last-child { border-bottom: none; }
+.activity-item__body { flex: 1; min-width: 0; }
+.activity-item__title {
+  font-weight: 700; font-size: 13px; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis;
+}
+.activity-item__meta {
+  font-size: 11.5px; color: var(--color-text-low); margin-top: 3px;
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+}
+.activity-item__value { font-weight: 700; font-size: 13px; flex-shrink: 0; white-space: nowrap; }
+
+@media (max-width: 640px) {
+  .activity-item__title { max-width: 46vw; }
+}

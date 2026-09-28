@@ -60,19 +60,37 @@ export async function render(container) {
   // Instant UX (gas-instant-ux Prinsip 2/4): paint the saldo boxes + matrix
   // from cache immediately if this period was already viewed this session,
   // then quietly refresh from the server.
+  //
+  // Feature F #1 (Total Kasbon/Potongan di Rincian Gaji & Lembur): the
+  // matrix also needs PAYROLL_DEDUCTIONS for this period (same action/params
+  // Kasbon.js already uses — getPayrollDeductions({period_id}) returns ALL
+  // employees' rows for the period, no new backend action needed). Fetched
+  // independently of getMonthlyRecap (own try/catch) so a hiccup fetching
+  // deductions never blocks the core recap/saldo from rendering — worst
+  // case Total Kasbon/Potongan just show 0 until it loads/retries.
   let painted = false;
-  try {
-    await fetchSWR('getMonthlyRecap', { period_id: period.id }, (recap) => {
-      painted = true;
-      renderSaldo(recap, period);
-      renderMatrix(recap);
-    });
-  } catch (e) {
+  let latestRecap = null;
+  let latestDeductions = [];
+  const repaintMatrix = () => { if (latestRecap) renderMatrix(latestRecap, latestDeductions); };
+
+  const recapPromise = fetchSWR('getMonthlyRecap', { period_id: period.id }, (recap) => {
+    painted = true;
+    latestRecap = recap;
+    renderSaldo(recap, period);
+    repaintMatrix();
+  }).catch(() => {
     if (!painted) {
       document.getElementById('saldo-section').innerHTML = `<div class="notice notice-critical">${icon('alert')} Gagal memuat Rekap Bulanan.</div>`;
       document.getElementById('matrix-section').innerHTML = '';
     }
-  }
+  });
+
+  const deductionsPromise = fetchSWR('getPayrollDeductions', { period_id: period.id }, (rows) => {
+    latestDeductions = rows || [];
+    repaintMatrix();
+  }).catch(() => { /* non-fatal — lihat komentar di atas */ });
+
+  await Promise.all([recapPromise, deductionsPromise]);
 }
 
 function renderPeriodActions(period) {
@@ -171,7 +189,7 @@ function renderSaldo(recap, period) {
   `;
 }
 
-function buildMatrixRows(recap) {
+function buildMatrixRows(recap, deductions) {
   const perOwner = recap.perOwner || {};
   const ownerRow = Object.values(perOwner); // {owner_id, owner_name, owner_code, jahit, sablon, pengeluaran, pemasukan}
   const byCode = (code) => ownerRow.find((o) => String(o.owner_code || '').toUpperCase() === code) || {};
@@ -181,6 +199,38 @@ function buildMatrixRows(recap) {
     (Number(gaji.gajiHarian) || 0) + (Number(gaji.gajiMinggu) || 0) + (Number(gaji.lembur) || 0);
   const pengeluaran = recap.pengeluaran || {};
   const pengeluaranTotal = (Number(pengeluaran.pingbro) || 0) + (Number(pengeluaran.sunrise) || 0);
+
+  // Feature F #1 — Total Kasbon / Total Potongan / Total Bersih di Rincian
+  // Gaji & Lembur. PAYROLL_DEDUCTIONS punya 3 jenis (lihat config.js
+  // DEDUCTION_TYPES: kasbon / hutang_cicilan / potongan_lain) dan TIDAK
+  // punya owner_id sama sekali (per-employee, sama seperti Gaji & Lembur di
+  // atas — shared labor pool, karenanya juga tampil di kolom Biaya Bersama,
+  // bukan per-Owner). Rumus ini SENGAJA meniru persis
+  // computeSalarySlipCore() di backend/SalarySlip.gs (satu-satunya rumus
+  // "potongan gaji" yang sudah ada di sistem, dipakai Slip Gaji per
+  // pekerja): kasbon = Σnominal (jenis kasbon), hutang_cicilan memakai
+  // `nominal_cicilan` (cicilan BULAN INI, bukan total_hutang keseluruhan),
+  // potongan_lain = Σnominal — lalu diagregasi lintas SEMUA pekerja untuk
+  // periode ini (bukan satu pekerja seperti di Slip Gaji). "Total Potongan"
+  // = hutang_cicilan + potongan_lain (kasbon dipisah sendiri, mengikuti
+  // pemisahan 2 baris yang diminta user), match dengan
+  // computeSalarySlipCore's totalPotongan = kasbon + cicilanBulanIni + potonganLain.
+  //
+  // "Total Bersih" = Total Gaji & Lembur - (Total Kasbon + Total Potongan)
+  // adalah figur INFORMASI untuk bagian rincian ini SAJA — TIDAK
+  // ditambahkan/dikurangkan ke "Total Biaya"/"Hasil Bulan" Rekap di bawah.
+  // Kasbon & Potongan adalah potongan Slip Gaji pekerja (mengurangi apa yang
+  // diterima pekerja), BUKAN biaya usaha Owner — beda dari Gaji & Lembur
+  // yang memang dicatat ulang sebagai Pengeluaran Owner. Sehingga tidak ada
+  // risiko dihitung dua kali ke Total Biaya (yang sudah exclude Kasbon/
+  // Potongan sejak awal, lihat Rekap.gs).
+  const rows_ = deductions || [];
+  const sumJenis = (jenis, field) => rows_
+    .filter((r) => r.jenis === jenis)
+    .reduce((s, r) => s + (Number(r[field]) || 0), 0);
+  const totalKasbon = sumJenis('kasbon', 'nominal');
+  const totalPotongan = sumJenis('potongan_lain', 'nominal') + sumJenis('hutang_cicilan', 'nominal_cicilan');
+  const totalBersih = gajiTotal - (totalKasbon + totalPotongan);
 
   const row = (label, { pingbro = null, sunrise = null, brotherhood = null, bersama = null, gabungan, emphasize = false } = {}) => ({
     label, emphasize,
@@ -203,21 +253,32 @@ function buildMatrixRows(recap) {
     row('Gaji Harian', { bersama: gaji.gajiHarian, gabungan: gaji.gajiHarian }),
     row('Gaji Minggu', { bersama: gaji.gajiMinggu, gabungan: gaji.gajiMinggu }),
     row('Lembur', { bersama: gaji.lembur, gabungan: gaji.lembur }),
-    row('Total Gaji & Lembur (informasi)', { bersama: gajiTotal, gabungan: gajiTotal }),
+    row('Total Gaji & Lembur', { bersama: gajiTotal, gabungan: gajiTotal, emphasize: true }),
+    row('Total Kasbon', { bersama: -totalKasbon, gabungan: -totalKasbon }),
+    row('Total Potongan', { bersama: -totalPotongan, gabungan: -totalPotongan }),
+    row('Total Bersih (Gaji & Lembur setelah Kasbon/Potongan)', { bersama: totalBersih, gabungan: totalBersih, emphasize: true }),
     row('Pengeluaran', { pingbro: pengeluaran.pingbro, sunrise: pengeluaran.sunrise, brotherhood: null, gabungan: pengeluaranTotal }),
     row('Total Biaya (= Pengeluaran PINGBRO + SUNRISE)', { gabungan: recap.totalBiaya, emphasize: true }),
     row('Hasil Bulan', { gabungan: recap.hasilBulan, emphasize: true })
   ];
 }
 
-function renderMatrix(recap) {
+function renderMatrix(recap, deductions) {
   const root = document.getElementById('matrix-section');
   if (!recap) {
     root.innerHTML = '<div class="notice notice-info">Data matriks belum tersedia dari server untuk periode ini.</div>';
     return;
   }
-  const rows = buildMatrixRows(recap);
-  const cell = (v) => (v === null || v === undefined ? '<span class="text-muted">—</span>' : formatCurrency(v));
+  const rows = buildMatrixRows(recap, deductions);
+  // Negative values (Total Kasbon/Total Potongan) render as "-Rp500.000",
+  // matching the existing convention in SlipGaji.js's "Rincian Potongan"
+  // (`-${formatCurrency(kasbon)}`) rather than formatCurrency's own
+  // "Rp-500.000" (Number.toLocaleString puts the sign after "Rp").
+  const cell = (v) => {
+    if (v === null || v === undefined) return '<span class="text-muted">—</span>';
+    const n = Number(v) || 0;
+    return n < 0 ? `-${formatCurrency(Math.abs(n))}` : formatCurrency(n);
+  };
   root.innerHTML = `<div class="table-wrap"><table class="data-table recap-matrix">
     <thead><tr><th>Metrik</th>${COLUMNS.map((c) => `<th class="num">${c.label}</th>`).join('')}</tr></thead>
     <tbody>${rows.map((r) => `
@@ -227,7 +288,7 @@ function renderMatrix(recap) {
       </tr>`).join('')}
     </tbody>
   </table></div>
-  <p class="subtitle mt-8">Gaji &amp; Lembur dibayar dari tenaga kerja bersama (shared labor pool) sehingga tidak dapat diatribusikan ke satu Owner — selalu tampil di kolom Biaya Bersama sebagai rincian informasi. Gaji &amp; Lembur sudah tercatat sebagai baris Pengeluaran (dibayar oleh Owner PINGBRO/SUNRISE) sehingga <strong>tidak dijumlahkan lagi</strong> ke "Total Biaya" — Total Biaya = Pengeluaran PINGBRO + SUNRISE saja, agar tidak dihitung dua kali. Pengeluaran hanya berlaku untuk PINGBRO &amp; SUNRISE (BROTHERHOOD tidak menanggung Pengeluaran operasional).</p>`;
+  <p class="subtitle mt-8">Gaji &amp; Lembur dibayar dari tenaga kerja bersama (shared labor pool) sehingga tidak dapat diatribusikan ke satu Owner — selalu tampil di kolom Biaya Bersama sebagai rincian informasi. Gaji &amp; Lembur sudah tercatat sebagai baris Pengeluaran (dibayar oleh Owner PINGBRO/SUNRISE) sehingga <strong>tidak dijumlahkan lagi</strong> ke "Total Biaya" — Total Biaya = Pengeluaran PINGBRO + SUNRISE saja, agar tidak dihitung dua kali. Kasbon &amp; Potongan (dari halaman Kasbon &amp; Potongan) adalah potongan Slip Gaji pekerja, bukan biaya Owner — "Total Bersih" di rincian ini hanya informasi gaji-setelah-potongan per pekerja secara agregat, dan tidak memengaruhi Total Biaya/Hasil Bulan di bawah. Pengeluaran hanya berlaku untuk PINGBRO &amp; SUNRISE (BROTHERHOOD tidak menanggung Pengeluaran operasional).</p>`;
 }
 
 function renderKoreksiForm(period) {
