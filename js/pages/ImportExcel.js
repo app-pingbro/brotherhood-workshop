@@ -1,14 +1,22 @@
 // ============================================================================
-// Import Excel — 4-step wizard: Periode + Owner -> Upload ONE .xlsx ->
-// Preview (per-row validation, per-category) -> Konfirmasi.
+// Import Excel — 4-step wizard: Periode -> Upload ONE .xlsx -> Preview
+// (per-row validation, per-category) -> Konfirmasi.
 //
-// One file = one sync process covering ALL categories at once:
-//   Sheet JAHIT   -> kategori jahit
-//   Sheet SABLON  -> kategori sablon
-//   Sheet GAJI    -> dipecah berdasarkan kolom "Jenis Gaji" menjadi kategori
-//                    gaji_jahit / gaji_sablon / gaji_harian / lembur (Lembur
-//                    tidak lagi punya sheet sendiri — digabung ke sini)
-//   Sheet KASBON  -> kategori kasbon (baru)
+// Template mengikuti PERSIS struktur file acuan yang diberikan pengguna
+// (Template-Import-Brotherhood.xlsx) — sheet-sheet TERPISAH, bukan satu sheet
+// "GAJI" dengan kolom diskriminator seperti versi sebelumnya:
+//   Sheet JAHIT        -> kategori jahit        (Owner kini kolom PER BARIS)
+//   Sheet SABLON       -> kategori sablon       (Owner kini kolom PER BARIS)
+//   Sheet GAJI JAHIT   -> kategori gaji_jahit   (sheet sendiri, tidak digabung)
+//   Sheet GAJI SABLON  -> kategori gaji_sablon  (sheet sendiri, tidak digabung)
+//   Sheet GAJI HARIAN  -> kategori gaji_harian; kolom "Jumlah Jam Lembur" di
+//                         sheet yang SAMA dipecah otomatis menjadi kategori
+//                         lembur bila > 0 (Lembur tidak punya sheet sendiri)
+//   Sheet KASBON       -> kategori kasbon. Setiap baris pekerja punya sampai
+//                         3 kolom nominal (Kasbon (PINGBRO), Kasbon (SUNRISE),
+//                         Hutang Cicilan) yang masing-masing dipecah menjadi
+//                         baris tersendiri (>0 saja) sebelum dikirim ke server.
+//   Sheet PENGELUARAN  -> kategori pengeluaran (BARU — lihat requirement #3/#4)
 // Sheet yang kosong/tidak ada di file = kategori itu dilewati sepenuhnya,
 // data yang sudah ada untuk kategori itu TIDAK disentuh. Baris yang datanya
 // sudah ada (dicocokkan lewat identitas alami masing-masing kategori, bukan
@@ -17,18 +25,22 @@
 // (tidak ditulis ulang). Lihat backend/ExcelImport.gs (runMultiValidationBatch_
 // / confirmMultiImport_) untuk aturan pencocokan lengkap per kategori.
 //
+// Owner untuk JAHIT/SABLON/PENGELUARAN kini kolom PER BARIS (bukan satu
+// Owner untuk seluruh file seperti versi sebelumnya) — satu file bisa berisi
+// campuran PINGBRO/SUNRISE/BROTHERHOOD (BROTHERHOOD ditolak khusus untuk
+// PENGELUARAN, sama seperti input manual).
+//
 // Parses the workbook client-side with SheetJS (CDN, loaded lazily) into
 // plain row arrays per category, computes a SHA-256 file fingerprint
 // client-side, then drives checkFileFingerprintMulti -> importExcelMulti ->
-// confirmImportMulti (all three new actions, added alongside the untouched
-// single-module actions the app used before this change).
+// confirmImportMulti (all three actions already generic over an arbitrary
+// `categories` map — no backend action was added for Pengeluaran).
 // ============================================================================
 import { fetchData, postData } from '../api.js';
 import { invalidate, invalidatePrefix } from '../cache.js';
 import { formatCurrency, escapeHtml, toast, badge, formatPeriodLabel } from '../ui.js';
 import { icon } from '../icons.js';
 import { getCurrentPeriod, getLookups } from '../state.js';
-import { ownerOptions } from '../lookups.js';
 import { DEDUCTION_TYPES } from '../config.js';
 
 const DEDUCTION_LABEL = Object.fromEntries(DEDUCTION_TYPES.map((t) => [t.value, t.label]));
@@ -51,34 +63,32 @@ function loadXlsx() {
 
 // ---------------------------------------------------------------------------
 // CATEGORY_DEFS — one entry per importable category. Everything about how a
-// category is PREVIEWED/RESULT-linked lives here; the SHEET_DEFS below (one
-// per physical Excel sheet) is where a raw workbook row becomes a category
-// row. previewCols/mapValid for jahit/sablon/gaji_jahit/gaji_sablon/
-// gaji_harian/lembur are copied verbatim from the single-module wizard this
-// replaces — the backend's `computed` shape for those six categories did not
-// change, only kasbon is new.
+// category is PREVIEWED/RESULT-linked lives here. jahit/sablon now show an
+// Owner column (per-row, no longer a single wizard-level selection);
+// gaji_jahit/gaji_sablon/gaji_harian/lembur are unchanged from before;
+// pengeluaran is new.
 // ---------------------------------------------------------------------------
 const CATEGORY_DEFS = {
   jahit: {
-    label: 'Jahit', needsOwner: true,
+    label: 'Jahit', needsOwner: false,
     previewCols: [
-      { key: 'jenis', label: 'Jenis' }, { key: 'name', label: 'Order' },
+      { key: 'owner', label: 'Owner' }, { key: 'jenis', label: 'Jenis' }, { key: 'name', label: 'Order' },
       { key: 'jumlah', label: 'Jumlah', align: 'num' },
       { key: 'harga', label: 'Harga', align: 'num', money: true },
       { key: 'total', label: 'Total', align: 'num', money: true }
     ],
-    mapValid: (r) => ({ jenis: r.computed.jenis_label, name: r.computed.nama_order, jumlah: r.computed.jumlah, harga: r.computed.harga, total: r.computed.total }),
+    mapValid: (r) => ({ owner: r.computed.owner_name, jenis: r.computed.jenis_label, name: r.computed.nama_order, jumlah: r.computed.jumlah, harga: r.computed.harga, total: r.computed.total }),
     resultLink: '#/jahit', resultLabel: 'Lihat Transaksi Jahit', listAction: 'getSewingTransactions', extraInvalidate: []
   },
   sablon: {
-    label: 'Sablon', needsOwner: true,
+    label: 'Sablon', needsOwner: false,
     previewCols: [
-      { key: 'jenis', label: 'Jenis' }, { key: 'name', label: 'Design' },
+      { key: 'owner', label: 'Owner' }, { key: 'jenis', label: 'Jenis' }, { key: 'name', label: 'Design' },
       { key: 'warna', label: 'Warna', align: 'num' }, { key: 'jumlah', label: 'Jumlah', align: 'num' },
       { key: 'harga', label: 'Harga', align: 'num', money: true },
       { key: 'total', label: 'Total', align: 'num', money: true }
     ],
-    mapValid: (r) => ({ jenis: r.computed.jenis_label, name: r.computed.nama_desain, warna: r.computed.jumlah_warna, jumlah: r.computed.jumlah, harga: r.computed.harga, total: r.computed.total }),
+    mapValid: (r) => ({ owner: r.computed.owner_name, jenis: r.computed.jenis_label, name: r.computed.nama_desain, warna: r.computed.jumlah_warna, jumlah: r.computed.jumlah, harga: r.computed.harga, total: r.computed.total }),
     resultLink: '#/sablon', resultLabel: 'Lihat Transaksi Sablon', listAction: 'getPrintingTransactions', extraInvalidate: []
   },
   gaji_jahit: {
@@ -128,21 +138,50 @@ const CATEGORY_DEFS = {
   kasbon: {
     label: 'Kasbon & Potongan', needsOwner: false,
     previewCols: [
-      { key: 'pekerja', label: 'Pekerja' }, { key: 'jenis', label: 'Jenis' }, { key: 'tanggal', label: 'Tanggal' },
-      { key: 'nominal', label: 'Nominal', align: 'num', money: true },
-      { key: 'totalHutang', label: 'Total Hutang', align: 'num', money: true },
-      { key: 'cicilanKe', label: 'Cicilan ke-', align: 'num' }
+      { key: 'pekerja', label: 'Pekerja' }, { key: 'jenis', label: 'Jenis' },
+      { key: 'keterangan', label: 'Keterangan' },
+      { key: 'nominal', label: 'Nominal', align: 'num', money: true }
     ],
     mapValid: (r) => ({
       pekerja: r.computed.employee_name, jenis: DEDUCTION_LABEL[r.computed.jenis] || r.computed.jenis,
-      tanggal: r.computed.tanggal, nominal: r.computed.nominal,
-      totalHutang: r.computed.total_hutang || 0, cicilanKe: r.computed.cicilan_ke || '-'
+      keterangan: r.computed.keterangan, nominal: r.computed.nominal
     }),
     resultLink: '#/kasbon', resultLabel: 'Lihat Kasbon & Potongan', listAction: 'getPayrollDeductions', extraInvalidate: []
+  },
+  pengeluaran: {
+    label: 'Pengeluaran', needsOwner: false,
+    previewCols: [
+      { key: 'owner', label: 'Owner' }, { key: 'tanggal', label: 'Tanggal' },
+      { key: 'jenis', label: 'Jenis Pengeluaran' }, { key: 'keterangan', label: 'Keterangan' },
+      { key: 'nominal', label: 'Nominal', align: 'num', money: true }
+    ],
+    mapValid: (r) => ({
+      owner: r.computed.owner_name, tanggal: r.computed.tanggal,
+      jenis: r.computed.expense_type_name + (r.computed.isNewExpenseType ? ' (baru)' : ''),
+      keterangan: r.computed.keterangan, nominal: r.computed.nominal
+    }),
+    resultLink: '#/pengeluaran', resultLabel: 'Lihat Pengeluaran', listAction: 'getExpenses', extraInvalidate: []
   }
 };
 
-const GAJI_JENIS_MAP = { jahit: 'gaji_jahit', sablon: 'gaji_sablon', harian: 'gaji_harian', lembur: 'lembur' };
+// Physical sheet names, in the exact order/labels the user's required
+// preview-summary format uses (requirement #5 — "JAHIT : 25 data", dst).
+// This is intentionally per PHYSICAL SHEET, not per backend category: GAJI
+// HARIAN's "Jumlah Jam Lembur" column and KASBON's 3 nominal columns each
+// expand into more than one backend row/category, but the user only wants
+// one line per sheet they actually filled in.
+const SHEET_LABEL_ORDER = ['JAHIT', 'SABLON', 'GAJI JAHIT', 'GAJI SABLON', 'GAJI HARIAN', 'KASBON', 'PENGELUARAN'];
+
+// Which category a page's "Import Excel" button should hint the user toward
+// filling in — used only for the one-line contextual notice on Step 1.
+const MODULE_SHEET_HINT = {
+  gaji_jahit: 'GAJI JAHIT',
+  gaji_sablon: 'GAJI SABLON',
+  gaji_harian: 'GAJI HARIAN (kolom "Jumlah Jam Lembur" untuk Lembur)',
+  lembur: 'GAJI HARIAN (kolom "Jumlah Jam Lembur")',
+  kasbon: 'KASBON',
+  pengeluaran: 'PENGELUARAN'
+};
 
 function samplePekerja(lk) {
   const rows = (lk?.employees || []).filter((e) => e.active !== false);
@@ -152,9 +191,18 @@ function sampleName(lk, key) {
   const rows = (lk?.[key] || []).filter((e) => e.active !== false);
   return rows[0] ? rows[0].name : 'Contoh';
 }
+function sampleOwnerName(lk) {
+  const rows = (lk?.owners || []).filter((o) => o.active !== false && String(o.code || '').toUpperCase() !== 'BROTHERHOOD');
+  return rows[0] ? rows[0].name : 'PINGBRO';
+}
 
 function isBlankRow(r) {
   return Object.values(r).every((v) => v === '' || v === null || v === undefined);
+}
+
+function toNum(v) {
+  const n = Number(v);
+  return isFinite(n) ? n : 0;
 }
 
 // Accepts a JS Date (if SheetJS ever returns one), an Excel serial date
@@ -178,16 +226,16 @@ function normalizeDateCell(v) {
   return isNaN(parsed.getTime()) ? s : parsed.toISOString().slice(0, 10);
 }
 
-const STEPS = ['Periode & Owner', 'Upload File', 'Preview', 'Konfirmasi'];
+const STEPS = ['Periode', 'Upload File', 'Preview', 'Konfirmasi'];
 
 const wiz = {
   step: 0,
   periodId: '',
-  ownerId: '',
   file: null,
   fileHash: '',
   fingerprint: null,
   categories: null,
+  sheetCounts: null,
   parseWarnings: [],
   preview: null,
   confirmed: false
@@ -206,18 +254,19 @@ export function goToImportExcel(moduleKey) {
 
 export async function render(container) {
   const period = getCurrentPeriod();
-  wiz.step = 0; wiz.periodId = period ? period.id : ''; wiz.ownerId = '';
-  wiz.file = null; wiz.fileHash = ''; wiz.fingerprint = null; wiz.categories = null; wiz.parseWarnings = [];
+  wiz.step = 0; wiz.periodId = period ? period.id : '';
+  wiz.file = null; wiz.fileHash = ''; wiz.fingerprint = null; wiz.categories = null; wiz.sheetCounts = null; wiz.parseWarnings = [];
   wiz.preview = null; wiz.confirmed = false;
-  const cameFrom = pendingModule && CATEGORY_DEFS[pendingModule] ? CATEGORY_DEFS[pendingModule].label : null;
+  const cameFromKey = pendingModule && CATEGORY_DEFS[pendingModule] ? pendingModule : null;
+  const cameFrom = cameFromKey ? CATEGORY_DEFS[cameFromKey].label : null;
   pendingModule = null;
 
   container.innerHTML = `
     <div class="page-header">
-      <div><h1>Import Excel</h1><div class="subtitle">Input massal Jahit/Sablon/Penggajian/Kasbon lewat SATU file .xlsx &mdash; harga/tarif selalu dihitung server, bukan dari file. Sheet yang kosong dilewati; data yang sudah ada diperbarui otomatis, tidak diduplikat.</div></div>
+      <div><h1>Import Excel</h1><div class="subtitle">Input massal Jahit/Sablon/Penggajian/Kasbon/Pengeluaran lewat SATU file .xlsx &mdash; harga/tarif selalu dihitung server, bukan dari file. Sheet yang kosong dilewati; data yang sudah ada diperbarui otomatis, tidak diduplikat.</div></div>
       <div class="page-header__actions"><button class="btn btn-secondary" id="dl-template">${icon('download', 15)} Unduh Template Excel</button></div>
     </div>
-    ${cameFrom ? `<div class="notice notice-info mb-12">${icon('file', 15)} Anda datang dari halaman <strong>${escapeHtml(cameFrom)}</strong> &mdash; isi sheet yang sesuai di template (sheet GAJI dengan kolom "Jenis Gaji", atau sheet KASBON), sheet lain boleh dikosongkan.</div>` : ''}
+    ${cameFrom ? `<div class="notice notice-info mb-12">${icon('file', 15)} Anda datang dari halaman <strong>${escapeHtml(cameFrom)}</strong> &mdash; isi sheet <strong>${escapeHtml(MODULE_SHEET_HINT[cameFromKey] || cameFrom)}</strong> di template, sheet lain boleh dikosongkan.</div>` : ''}
     <div class="wizard-steps" id="wizard-steps"></div>
     <div class="card" id="wizard-body"></div>
   `;
@@ -246,10 +295,9 @@ function renderStepBody() {
   return renderStep4(root);
 }
 
-// ---- Step 1: Period + Owner (Owner only meaningful for Jahit/Sablon, but
-// asked up front like before rather than deferred until after upload) ------
+// ---- Step 1: Period only — Owner is no longer a wizard-level selection, it
+// is now a per-row column on the JAHIT/SABLON/PENGELUARAN sheets themselves. --
 function renderStep1(root) {
-  const lk = getLookups();
   const period = getCurrentPeriod();
   const isClosed = period && String(period.status || '').toLowerCase() === 'closed';
 
@@ -261,26 +309,17 @@ function renderStep1(root) {
         <div class="field-computed">${escapeHtml(period ? formatPeriodLabel(period) : 'Belum dipilih')}</div>
         <div class="hint">Gunakan selector periode di kanan atas untuk mengganti.</div>
       </div>
-      <div class="field">
-        <label>Owner/Subunit <span class="required-mark">*</span></label>
-        <select class="input" id="wiz-owner">
-          <option value="">Pilih Owner...</option>
-          ${ownerOptions(lk).map((o) => `<option value="${o.value}" ${wiz.ownerId === o.value ? 'selected' : ''}>${escapeHtml(o.label)}</option>`).join('')}
-        </select>
-        <div class="hint">Hanya dipakai untuk data pada sheet JAHIT/SABLON (jika ada di file). Satu file = satu Owner untuk kedua sheet itu.</div>
-      </div>
     </div>
     <div class="notice notice-info mb-12">
-      Satu file Excel bisa berisi sebagian atau semua kategori berikut: <strong>Jahit, Sablon, Gaji Jahit, Gaji Sablon, Gaji Harian, Lembur, Kasbon &amp; Potongan</strong> &mdash; semuanya disinkronkan dalam satu kali proses.
-      Sheet yang dikosongkan tidak akan diproses, dan data yang sudah ada untuk kategori itu tidak akan terhapus.
+      Satu file Excel bisa berisi sebagian atau semua sheet berikut: <strong>JAHIT, SABLON, GAJI JAHIT, GAJI SABLON, GAJI HARIAN, KASBON, PENGELUARAN</strong> &mdash; semuanya disinkronkan dalam satu kali proses.
+      Kolom <strong>Owner</strong> pada sheet JAHIT/SABLON/PENGELUARAN kini diisi per baris &mdash; satu file boleh berisi campuran Owner yang berbeda.
+      Sheet yang dikosongkan tidak akan diproses, dan data yang sudah ada untuk sheet itu tidak akan terhapus.
     </div>
     <div class="form-actions">
       <button class="btn btn-primary" id="wiz-next" ${isClosed || !period ? 'disabled' : ''}>Lanjut</button>
     </div>
   `;
-  document.getElementById('wiz-owner').addEventListener('change', (e) => { wiz.ownerId = e.target.value; });
   document.getElementById('wiz-next').addEventListener('click', () => {
-    if (!wiz.ownerId) { toast('Pilih Owner/Subunit terlebih dahulu.', 'error'); return; }
     wiz.step = 1;
     renderStepBody();
   });
@@ -292,7 +331,7 @@ function renderStep2(root) {
     <div class="dropzone" id="dropzone">
       ${icon('upload', 28)}
       <p class="mt-8" style="font-weight:700">Seret file .xlsx ke sini, atau klik untuk memilih</p>
-      <p class="text-low">Sheet yang dikenali: JAHIT, SABLON, GAJI, KASBON &mdash; isi salah satu, beberapa, atau semuanya sekaligus.</p>
+      <p class="text-low">Sheet yang dikenali: JAHIT, SABLON, GAJI JAHIT, GAJI SABLON, GAJI HARIAN, KASBON, PENGELUARAN &mdash; isi salah satu, beberapa, atau semuanya sekaligus.</p>
       <input type="file" id="file-input" accept=".xlsx" style="display:none" />
     </div>
     <div id="upload-status" class="mt-12"></div>
@@ -329,62 +368,114 @@ async function handleWorkbook(file) {
 
     const XLSX = await loadXlsx();
     const wb = XLSX.read(buffer, { type: 'array' });
-    const findSheet = (name) => wb.Sheets[name] || wb.Sheets[wb.SheetNames.find((n) => n.toUpperCase() === name)];
+    const findSheet = (name) => wb.Sheets[name] || wb.Sheets[wb.SheetNames.find((n) => n.toUpperCase().trim() === name)];
 
-    const categories = { jahit: [], sablon: [], gaji_jahit: [], gaji_sablon: [], gaji_harian: [], lembur: [], kasbon: [] };
+    const categories = { jahit: [], sablon: [], gaji_jahit: [], gaji_sablon: [], gaji_harian: [], lembur: [], kasbon: [], pengeluaran: [] };
+    const sheetCounts = {}; // physical-sheet row counts, drives the exact-format summary (requirement #5)
     const warnings = [];
 
     const jahitSheet = findSheet('JAHIT');
     if (jahitSheet) {
+      let n = 0;
       XLSX.utils.sheet_to_json(jahitSheet, { defval: '' }).forEach((r) => {
         if (isBlankRow(r)) return;
-        categories.jahit.push({ jenis: String(r['Jenis'] ?? '').trim(), order: String(r['Order Jahit'] ?? '').trim(), jumlah: r['Jumlah'] });
+        n++;
+        categories.jahit.push({ owner: String(r['Owner'] ?? '').trim(), jenis: String(r['Jenis'] ?? '').trim(), order: String(r['Order Jahit'] ?? '').trim(), jumlah: r['Jumlah'] });
       });
+      if (n) sheetCounts['JAHIT'] = n;
     }
     const sablonSheet = findSheet('SABLON');
     if (sablonSheet) {
+      let n = 0;
       XLSX.utils.sheet_to_json(sablonSheet, { defval: '' }).forEach((r) => {
         if (isBlankRow(r)) return;
-        categories.sablon.push({ jenis: String(r['Jenis'] ?? '').trim(), design: String(r['Design Sablon'] ?? '').trim(), warna: r['Warna'], jumlah: r['Jumlah'] });
+        n++;
+        categories.sablon.push({ owner: String(r['Owner'] ?? '').trim(), jenis: String(r['Jenis'] ?? '').trim(), design: String(r['Design Sablon'] ?? '').trim(), warna: r['Warna'], jumlah: r['Jumlah'] });
       });
+      if (n) sheetCounts['SABLON'] = n;
     }
-    const gajiSheet = findSheet('GAJI');
-    if (gajiSheet) {
-      XLSX.utils.sheet_to_json(gajiSheet, { defval: '' }).forEach((r, idx) => {
+    const gajiJahitSheet = findSheet('GAJI JAHIT');
+    if (gajiJahitSheet) {
+      let n = 0;
+      XLSX.utils.sheet_to_json(gajiJahitSheet, { defval: '' }).forEach((r) => {
         if (isBlankRow(r)) return;
-        const target = GAJI_JENIS_MAP[String(r['Jenis Gaji'] ?? '').trim().toLowerCase()];
-        if (!target) {
-          warnings.push(`Sheet GAJI baris ${idx + 2}: kolom "Jenis Gaji" kosong/tidak dikenali ("${r['Jenis Gaji']}") — baris ini diabaikan. Gunakan salah satu: Jahit, Sablon, Harian, Lembur.`);
-          return;
-        }
-        const pekerja = String(r['Pekerja'] ?? '').trim();
-        if (target === 'gaji_jahit') categories.gaji_jahit.push({ pekerja, jenis_pekerjaan: String(r['Jenis Pekerjaan/Tinta'] ?? '').trim(), order: String(r['Nama Order/Desain'] ?? '').trim(), jumlah: r['Jumlah'] });
-        else if (target === 'gaji_sablon') categories.gaji_sablon.push({ pekerja, jenis_tinta: String(r['Jenis Pekerjaan/Tinta'] ?? '').trim(), design: String(r['Nama Order/Desain'] ?? '').trim(), warna: r['Warna'], jumlah: r['Jumlah'] });
-        else if (target === 'gaji_harian') categories.gaji_harian.push({ pekerja, hari_biasa: r['Jumlah Hari Biasa'], hari_minggu: r['Jumlah Hari Minggu'] });
-        else categories.lembur.push({ pekerja, jam: r['Jumlah Jam'] });
+        n++;
+        categories.gaji_jahit.push({ pekerja: String(r['Pekerja'] ?? '').trim(), jenis_pekerjaan: String(r['Jenis Pekerjaan'] ?? '').trim(), order: String(r['Nama Order'] ?? '').trim(), jumlah: r['Jumlah'] });
       });
+      if (n) sheetCounts['GAJI JAHIT'] = n;
+    }
+    const gajiSablonSheet = findSheet('GAJI SABLON');
+    if (gajiSablonSheet) {
+      let n = 0;
+      XLSX.utils.sheet_to_json(gajiSablonSheet, { defval: '' }).forEach((r) => {
+        if (isBlankRow(r)) return;
+        n++;
+        categories.gaji_sablon.push({ pekerja: String(r['Pekerja'] ?? '').trim(), jenis_tinta: String(r['Jenis Tinta'] ?? '').trim(), design: String(r['Nama Desain'] ?? '').trim(), warna: r['Warna'], jumlah: r['Jumlah'] });
+      });
+      if (n) sheetCounts['GAJI SABLON'] = n;
+    }
+    const gajiHarianSheet = findSheet('GAJI HARIAN');
+    if (gajiHarianSheet) {
+      let n = 0;
+      XLSX.utils.sheet_to_json(gajiHarianSheet, { defval: '' }).forEach((r) => {
+        if (isBlankRow(r)) return;
+        n++;
+        const pekerja = String(r['Pekerja'] ?? '').trim();
+        categories.gaji_harian.push({ pekerja, hari_biasa: r['Jumlah Hari Biasa'], hari_minggu: r['Jumlah Hari Minggu'] });
+        // Lembur is embedded in this same sheet (per the uploaded template) —
+        // only spun off into its own category row when actually > 0, so a
+        // worker with no overtime this period doesn't get a spurious
+        // 0-jam Overtime row.
+        const jam = toNum(r['Jumlah Jam Lembur']);
+        if (jam > 0) categories.lembur.push({ pekerja, jam: r['Jumlah Jam Lembur'] });
+      });
+      if (n) sheetCounts['GAJI HARIAN'] = n;
     }
     const kasbonSheet = findSheet('KASBON');
     if (kasbonSheet) {
+      let n = 0;
       XLSX.utils.sheet_to_json(kasbonSheet, { defval: '' }).forEach((r) => {
         if (isBlankRow(r)) return;
-        categories.kasbon.push({
-          pekerja: String(r['Pekerja'] ?? '').trim(), jenis: r['Jenis'], tanggal: normalizeDateCell(r['Tanggal']),
-          nominal: r['Nominal'], total_hutang: r['Total Hutang'], nominal_cicilan: r['Nominal Cicilan'],
-          cicilan_ke: r['Cicilan ke-'], keterangan: r['Keterangan']
+        n++;
+        // New per-owner KASBON template (Pekerja / Jenis / Kasbon (PINGBRO) /
+        // Kasbon (SUNRISE) / Hutang Cicilan) — up to 3 backend rows per sheet
+        // row, one per non-empty amount bucket. "Jenis" itself is read but
+        // unused (kept in the template for the user's own reference) — each
+        // bucket's own fixed Keterangan is what tells the backend which kind
+        // of deduction it is (see backend/ExcelImport.gs mapDeductionJenis_).
+        const pekerja = String(r['Pekerja'] ?? '').trim();
+        const pingbro = toNum(r['Kasbon (PINGBRO)']);
+        const sunrise = toNum(r['Kasbon (SUNRISE)']);
+        const hutang = toNum(r['Hutang Cicilan']);
+        if (pingbro > 0) categories.kasbon.push({ pekerja, jenis: 'Kasbon', nominal: pingbro, keterangan: 'Kasbon (PINGBRO)' });
+        if (sunrise > 0) categories.kasbon.push({ pekerja, jenis: 'Kasbon', nominal: sunrise, keterangan: 'Kasbon (SUNRISE)' });
+        if (hutang > 0) categories.kasbon.push({ pekerja, jenis: 'Potongan Lain', nominal: hutang, keterangan: 'Hutang Cicilan' });
+      });
+      if (n) sheetCounts['KASBON'] = n;
+    }
+    const pengeluaranSheet = findSheet('PENGELUARAN');
+    if (pengeluaranSheet) {
+      let n = 0;
+      XLSX.utils.sheet_to_json(pengeluaranSheet, { defval: '' }).forEach((r) => {
+        if (isBlankRow(r)) return;
+        n++;
+        categories.pengeluaran.push({
+          owner: String(r['Owner'] ?? '').trim(), tanggal: normalizeDateCell(r['Tanggal']),
+          jenis: String(r['Jenis Pengeluaran'] ?? '').trim(), keterangan: String(r['Keterangan'] ?? '').trim(),
+          nominal: r['Nominal']
         });
       });
+      if (n) sheetCounts['PENGELUARAN'] = n;
     }
 
-    const presentCounts = Object.entries(categories).filter(([, rows]) => rows.length).map(([m, rows]) => `${CATEGORY_DEFS[m].label} (${rows.length})`);
-    if (!presentCounts.length) throw new Error('Tidak ada data pada sheet manapun (JAHIT/SABLON/GAJI/KASBON) di file ini.');
-
-    if ((categories.jahit.length || categories.sablon.length) && !wiz.ownerId) {
-      throw new Error('File ini berisi data Jahit/Sablon &mdash; kembali ke Langkah 1 dan pilih Owner/Subunit terlebih dahulu.');
+    if (!Object.keys(sheetCounts).length) {
+      throw new Error('Tidak ada data pada sheet manapun (JAHIT/SABLON/GAJI JAHIT/GAJI SABLON/GAJI HARIAN/KASBON/PENGELUARAN) di file ini.');
     }
 
     wiz.categories = categories;
+    wiz.sheetCounts = sheetCounts;
     wiz.parseWarnings = warnings;
+    const presentCounts = SHEET_LABEL_ORDER.filter((label) => sheetCounts[label]).map((label) => `${label} (${sheetCounts[label]})`);
     const warningHtml = warnings.length ? `<div class="mt-8" style="color:var(--status-warning-fg)">${warnings.map(escapeHtml).join('<br>')}</div>` : '';
 
     statusRoot.innerHTML = `<div class="notice notice-info">${icon('file', 15)} ${escapeHtml(file.name)} &mdash; terdeteksi: ${presentCounts.map(escapeHtml).join(', ')}.${warningHtml} Memeriksa apakah file ini pernah diimport...</div>`;
@@ -400,7 +491,7 @@ async function handleWorkbook(file) {
           <button class="btn btn-primary btn-sm" id="fp-again">Lanjutkan</button>
         </div>
       </div>`;
-      document.getElementById('fp-cancel').addEventListener('click', () => { wiz.file = null; wiz.categories = null; renderStepBody(); });
+      document.getElementById('fp-cancel').addEventListener('click', () => { wiz.file = null; wiz.categories = null; wiz.sheetCounts = null; renderStepBody(); });
       document.getElementById('fp-again').addEventListener('click', () => {
         statusRoot.innerHTML = `<div class="notice notice-info">${icon('check', 15)} Siap diperiksa: ${presentCounts.map(escapeHtml).join(', ')}.</div>${warningHtml}`;
         document.getElementById('wiz-next').disabled = false;
@@ -427,6 +518,24 @@ function statusBadge(r) {
   if (r.status === 'update') return badge('Diperbarui', 'warning');
   if (r.status === 'skip') return badge('Dilewati (sama)', 'neutral');
   return badge(String(r.status), 'neutral');
+}
+
+// Requirement #5's exact per-category count summary, e.g.:
+//   JAHIT        : 25 data
+//   SABLON       : 18 data
+//   ...
+// One line per physical sheet that actually had data — label padded to a
+// fixed width so the colons line up, exactly as specified.
+function renderSheetCountSummary(sheetCounts) {
+  const present = SHEET_LABEL_ORDER.filter((label) => sheetCounts && sheetCounts[label]);
+  if (!present.length) return '';
+  const lines = present.map((label) => `${label.padEnd(13, ' ')}: ${sheetCounts[label]} data`);
+  return `
+    <div class="card mb-16">
+      <h3 class="mb-8">Ringkasan Data per Sheet</h3>
+      <pre style="background:var(--surface-2, #f4f4f5);padding:12px 16px;border-radius:8px;font-family:inherit;line-height:1.6;margin:0">${escapeHtml(lines.join('\n'))}</pre>
+    </div>
+  `;
 }
 
 function renderCategoryPreviewTable(module, cat) {
@@ -468,7 +577,7 @@ async function runPreview() {
   const root = document.getElementById('wizard-body');
   const period = getCurrentPeriod();
   const res = await postData('importExcelMulti', {
-    period_id: period.id, owner_id: wiz.ownerId, categories: wiz.categories, file_hash: wiz.fileHash
+    period_id: period.id, categories: wiz.categories, file_hash: wiz.fileHash
   });
   if (!res.success) {
     root.innerHTML = `<div class="notice notice-critical">${icon('alert')} ${escapeHtml(res.message || 'Gagal memproses preview.')}</div>
@@ -482,6 +591,7 @@ async function runPreview() {
   const canImport = (totals.newCount || 0) + (totals.updateCount || 0) + (totals.skipCount || 0) > 0;
 
   root.innerHTML = `
+    ${renderSheetCountSummary(wiz.sheetCounts || {})}
     <div class="stat-strip mb-16">
       <div class="stat-strip__item"><div class="label">Data Baru</div><div class="value" style="color:var(--status-success-fg)">${totals.newCount || 0}</div></div>
       <div class="stat-strip__item"><div class="label">Data Diperbarui</div><div class="value" style="color:var(--status-warning-fg)">${totals.updateCount || 0}</div></div>
@@ -494,7 +604,7 @@ async function runPreview() {
     ${moduleKeys.map((m) => renderCategoryPreviewTable(m, wiz.preview.categories[m])).join('')}
     <div class="form-actions">
       <button class="btn btn-secondary" id="wiz-back">Batal</button>
-      <button class="btn btn-primary" id="wiz-confirm" ${canImport ? '' : 'disabled'}>Lanjutkan Import</button>
+      <button class="btn btn-primary" id="wiz-confirm" ${canImport ? '' : 'disabled'}>Confirm Import</button>
     </div>
   `;
   document.getElementById('wiz-back').addEventListener('click', () => { wiz.step = 1; renderStepBody(); });
@@ -514,7 +624,7 @@ async function runConfirm() {
   const root = document.getElementById('wizard-body');
   const period = getCurrentPeriod();
   const res = await postData('confirmImportMulti', {
-    period_id: period.id, owner_id: wiz.ownerId, categories: wiz.categories, file_hash: wiz.fileHash
+    period_id: period.id, categories: wiz.categories, file_hash: wiz.fileHash
   });
   if (!res.success) {
     root.innerHTML = `<div class="notice notice-critical">${icon('alert')} ${escapeHtml(res.message || 'Gagal menyimpan import.')}</div>
@@ -527,9 +637,9 @@ async function runConfirm() {
   toast('Import selesai.', 'success');
 
   // Invalidate caches only for the categories actually present in this file
-  // — same reasoning as the single-module wizard: rows land via direct
-  // writes / the Payroll.gs save handlers, bypassing renderCrudPage's own
-  // post-save invalidation, so it has to happen here.
+  // — same reasoning as before: rows land via direct writes / the Payroll.gs
+  // /Expenses.gs save handlers, bypassing renderCrudPage's own post-save
+  // invalidation, so it has to happen here.
   Object.keys(wiz.categories || {}).forEach((m) => {
     if (!wiz.categories[m].length) return;
     const def = CATEGORY_DEFS[m];
@@ -566,9 +676,12 @@ Gagal           : ${s.errorCount || 0}</pre>
 }
 
 // ---- Template download ------------------------------------------------------
-// One combined workbook: JAHIT, SABLON, GAJI (Gaji Jahit + Gaji Sablon +
-// Gaji Harian + Lembur digabung lewat kolom "Jenis Gaji"), KASBON (baru).
-// Same file whether downloaded from this page or from a Penggajian page's
+// Sheets built EXACTLY per the user-supplied Template-Import-Brotherhood.xlsx
+// (JAHIT/SABLON with a per-row Owner column, GAJI JAHIT/GAJI SABLON as their
+// own separate sheets, GAJI HARIAN with an embedded "Jumlah Jam Lembur"
+// column, KASBON with the per-owner Kasbon (PINGBRO)/Kasbon (SUNRISE)/Hutang
+// Cicilan columns) plus one new PENGELUARAN sheet (requirement #4). Same file
+// whether downloaded from this page or from a Penggajian/Pengeluaran page's
 // "Download Template Excel" button.
 async function downloadTemplate() {
   try {
@@ -576,31 +689,42 @@ async function downloadTemplate() {
     const XLSX = await loadXlsx();
     const wb = XLSX.utils.book_new();
     const pekerja = samplePekerja(lk);
+    const ownerA = sampleOwnerName(lk);
 
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
-      ['Jenis', 'Order Jahit', 'Jumlah'],
-      ['Kaos', 'Order A', 20], ['Longsleeve', 'Order B', 15]
+      ['Owner', 'Jenis', 'Order Jahit', 'Jumlah'],
+      [ownerA, 'Kaos', 'Order A', 20], [ownerA, 'Longsleeve', 'Order B', 15]
     ]), 'JAHIT');
 
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
-      ['Jenis', 'Design Sablon', 'Warna', 'Jumlah'],
-      ['WATERBASE', 'Logo PINGBRO', 2, 20], ['PLASTISOL', 'Design A', 3, 15]
+      ['Owner', 'Jenis', 'Design Sablon', 'Warna', 'Jumlah'],
+      [ownerA, 'WATERBASE', 'Logo PINGBRO', 2, 20], [ownerA, 'PLASTISOL', 'Design A', 3, 15]
     ]), 'SABLON');
 
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
-      ['Jenis Gaji', 'Pekerja', 'Jenis Pekerjaan/Tinta', 'Nama Order/Desain', 'Warna', 'Jumlah', 'Jumlah Hari Biasa', 'Jumlah Hari Minggu', 'Jumlah Jam'],
-      ['Jahit', pekerja, sampleName(lk, 'sewingJobTypes'), 'Order A', '', 20, '', '', ''],
-      ['Sablon', pekerja, sampleName(lk, 'inkTypes'), 'Design A', 2, 20, '', '', ''],
-      ['Harian', pekerja, '', '', '', '', 20, 4, ''],
-      ['Lembur', pekerja, '', '', '', '', '', '', 3]
-    ]), 'GAJI');
+      ['Pekerja', 'Jenis Pekerjaan', 'Nama Order', 'Jumlah'],
+      [pekerja, sampleName(lk, 'sewingJobTypes'), 'Order A', 20]
+    ]), 'GAJI JAHIT');
 
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
-      ['Pekerja', 'Jenis', 'Tanggal', 'Nominal', 'Total Hutang', 'Nominal Cicilan', 'Cicilan ke-', 'Keterangan'],
-      [pekerja, 'Kasbon', '2026-09-05', 100000, '', '', '', 'Kasbon awal bulan'],
-      [pekerja, 'Hutang - Cicilan', '2026-09-05', '', 300000, 50000, 1, 'Cicilan ke-1'],
-      [pekerja, 'Potongan Lain', '2026-09-05', 25000, '', '', '', 'Potongan seragam']
+      ['Pekerja', 'Jenis Tinta', 'Nama Desain', 'Warna', 'Jumlah'],
+      [pekerja, sampleName(lk, 'inkTypes'), 'Design A', 2, 20]
+    ]), 'GAJI SABLON');
+
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
+      ['Pekerja', 'Jumlah Hari Biasa', 'Jumlah Hari Minggu', 'Jumlah Jam Lembur'],
+      [pekerja, 20, 4, 3]
+    ]), 'GAJI HARIAN');
+
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
+      ['Pekerja', 'Jenis', 'Kasbon (PINGBRO)', 'Kasbon (SUNRISE)', 'Hutang Cicilan'],
+      [pekerja, 'KASBON', 300000, 500000, 1000000]
     ]), 'KASBON');
+
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
+      ['Owner', 'Tanggal', 'Jenis Pengeluaran', 'Keterangan', 'Nominal'],
+      [ownerA, '2026-09-05', 'Listrik', 'Tagihan bulanan', 250000]
+    ]), 'PENGELUARAN');
 
     XLSX.writeFile(wb, 'Template-Import-Brotherhood.xlsx');
   } catch (err) {
@@ -609,10 +733,11 @@ async function downloadTemplate() {
 }
 
 /**
- * Small header-button factory reused by the three Penggajian pages (Gaji
- * Jahit, Gaji Sablon, Gaji Harian & Lembur) — unchanged signature, one place
- * to keep the labels/behavior consistent. Both buttons now lead into the
- * single multi-category wizard/template rather than a per-module one.
+ * Small header-button factory reused by the Penggajian pages (Gaji Jahit,
+ * Gaji Sablon, Gaji Harian & Lembur) and now Pengeluaran too — unchanged
+ * signature, one place to keep the labels/behavior consistent. Both buttons
+ * lead into the single multi-category wizard/template rather than a
+ * per-module one.
  */
 export function buildImportExcelHeaderButtons(moduleKey) {
   const wrap = document.createElement('div');

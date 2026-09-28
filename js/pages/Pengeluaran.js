@@ -2,12 +2,25 @@
 // Pengeluaran — Expenses. Owner restricted to PINGBRO/SUNRISE only per
 // BUILD-SPEC's CHECK constraint (expenses.owner_id ∈ {PINGBRO, SUNRISE});
 // BROTHERHOOD has no operational Pengeluaran of its own in this schema.
+//
+// Jenis Pengeluaran is now a "ketik bebas" (free-type combobox) field, not a
+// fixed <select> — the user can type any new value without adding it to
+// Master Data first; historical values are still offered as suggestions via
+// an HTML5 <datalist> (see _shared.js's renderFieldHtml `f.datalist` option).
+// A brand-new typed value is auto-created in EXPENSE_TYPES by the backend
+// (Expenses.gs's resolveOrCreateExpenseType_) the moment it's actually saved.
+//
+// Also carries "Import Excel"/"Download Template Excel" header buttons,
+// reusing the exact same multi-category wizard/duplicate-detection mechanism
+// every other module already uses (backend/ExcelImport.gs) — no separate
+// import mechanism was built for Pengeluaran.
 // ============================================================================
 import { renderCrudPage } from './_shared.js';
 import { formatCurrency, formatDate, escapeHtml } from '../ui.js';
 import { getCurrentPeriod, getOwnerFilter, getLookups } from '../state.js';
-import { ownerIdByCode, ownerName, ownerOptions, activeOnly } from '../lookups.js';
+import { ownerIdByCode, ownerName, ownerOptions } from '../lookups.js';
 import { EXPENSE_OWNERS } from '../config.js';
+import { buildImportExcelHeaderButtons } from './ImportExcel.js';
 
 export async function render(container) {
   const period = getCurrentPeriod();
@@ -21,12 +34,18 @@ export async function render(container) {
       return { period_id: period?.id, owner_id: ownerIdByCode(getLookups(), restricted) };
     },
     headerExtra: (() => {
+      const wrap = document.createElement('div');
+      wrap.style.display = 'flex';
+      wrap.style.gap = '12px';
+      wrap.style.alignItems = 'center';
+      wrap.style.flexWrap = 'wrap';
+      wrap.appendChild(buildImportExcelHeaderButtons('pengeluaran'));
       const note = document.createElement('span');
       note.className = 'text-low';
       note.style.fontSize = '12px';
-      note.style.alignSelf = 'center';
       note.textContent = 'BROTHERHOOD tidak tersedia — tidak punya Pengeluaran operasional sendiri.';
-      return note;
+      wrap.appendChild(note);
+      return wrap;
     })(),
     emptyTitle: 'Belum ada Pengeluaran',
     emptyHint: 'Tambahkan biaya operasional PINGBRO/SUNRISE untuk periode ini.',
@@ -49,8 +68,9 @@ export async function render(container) {
         hint: 'Hanya PINGBRO/SUNRISE — Pengeluaran BROTHERHOOD tidak dicatat terpisah di modul ini.',
         default: () => { const c = getOwnerFilter(); return EXPENSE_OWNERS.includes(c) ? ownerIdByCode(getLookups(), c) : ''; } },
       { key: 'tanggal', label: 'Tanggal', type: 'date', required: true, default: () => new Date().toISOString().slice(0, 10) },
-      { key: 'expense_type_id', label: 'Jenis Pengeluaran', type: 'select', required: true,
-        options: (v, lk) => activeOnly(lk?.expenseTypes).filter((et) => !et.owner_id || et.owner_id === v.owner_id).map((et) => ({ value: et.id, label: et.name })) },
+      { key: 'expense_type_name', label: 'Jenis Pengeluaran', required: true,
+        datalist: (v, lk) => Array.from(new Set((lk?.expenseTypes || []).map((et) => et.name).filter(Boolean))).sort((a, b) => a.localeCompare(b)),
+        hint: 'Ketik bebas — jenis baru otomatis ditambahkan ke Master Data saat disimpan. Daftar di bawah adalah jenis yang sudah pernah dipakai.' },
       { key: 'keterangan', label: 'Keterangan', required: true, fullWidth: true },
       { key: 'nominal', label: 'Nominal', type: 'number', required: true, min: 0 }
     ],
@@ -58,11 +78,11 @@ export async function render(container) {
       period_id: period?.id,
       owner_id: v.owner_id,
       tanggal: v.tanggal,
-      expense_type_id: v.expense_type_id,
+      expense_type_name: v.expense_type_name,
       keterangan: v.keterangan,
       nominal: Number(v.nominal) || 0
     }),
-    mapRowToForm: (row) => ({ ...row, tanggal: (row.tanggal || '').slice(0, 10) })
+    mapRowToForm: (row) => ({ ...row, tanggal: (row.tanggal || '').slice(0, 10), expense_type_name: nameOf(row) })
   });
 }
 

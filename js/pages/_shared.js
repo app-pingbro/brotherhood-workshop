@@ -484,7 +484,19 @@ function renderFieldHtml(f, values, lookups) {
     // HTML attribute anymore since this isn't a number input.
     control = `<input class="input" type="text" inputmode="decimal" name="${f.key}" value="${escapeHtml(formatNumberDisplay(val, f.noGroup))}" placeholder="${escapeHtml(f.placeholder || '')}" />`;
   } else {
-    control = `<input class="input" type="${f.type || 'text'}" name="${f.key}" value="${escapeHtml(val ?? '')}" placeholder="${escapeHtml(f.placeholder || '')}" />`;
+    // Additive "ketik bebas" (free-type combobox) option: a plain-text field
+    // that also sets `f.datalist` gets an HTML5 <input list> + <datalist> of
+    // suggested/historical values, while still accepting any brand-new typed
+    // value — the browser's datalist is a suggestion list, never a
+    // restriction like <select> is. Fields that don't set `f.datalist` are
+    // completely unaffected (no list attribute, no datalist element).
+    const listId = f.datalist ? `dl-${f.key}` : '';
+    const listAttr = f.datalist ? ` list="${listId}"` : '';
+    control = `<input class="input" type="${f.type || 'text'}" name="${f.key}" value="${escapeHtml(val ?? '')}" placeholder="${escapeHtml(f.placeholder || '')}"${listAttr} autocomplete="off" />`;
+    if (f.datalist) {
+      const options = typeof f.datalist === 'function' ? f.datalist(values, lookups) : (f.datalist || []);
+      control += `<datalist id="${listId}">${options.map((o) => `<option value="${escapeHtml(o)}"></option>`).join('')}</datalist>`;
+    }
   }
   return `<div class="field${f.span2 ? '' : ''}" data-field-wrap="${f.key}" style="${f.fullWidth ? 'grid-column:1/-1' : ''}">
     <label>${escapeHtml(f.label)} ${required}</label>
