@@ -335,11 +335,55 @@ table.data-table { width: 100%; border-collapse: collapse; min-width: 640px; }
 .recap-matrix tr.total-row td { font-weight: 800; border-top: 2px solid var(--color-border-strong); }
 
 /* Slip Gaji */
-.slip-sheet { max-width: 560px; margin: 0 auto; }
+.slip-sheet { max-width: 640px; margin: 0 auto; }
 .slip-locked-banner { background: var(--status-warning-bg); color: var(--status-warning-fg); border-radius: var(--radius-sm); padding: 10px 14px; font-weight: 700; font-size: 12.5px; margin-bottom: 14px; display:flex; align-items:center; gap:8px; }
 .slip-line { display: flex; justify-content: space-between; padding: 7px 0; border-bottom: 1px dashed var(--color-border); font-size: 13px; }
 .slip-line.total { font-weight: 800; font-size: 15px; border-bottom: none; border-top: 2px solid var(--color-border-strong); padding-top: 10px; margin-top: 4px; }
 .slip-line.negative { color: var(--color-red); }
+
+/* Slip Gaji — professional document redesign (header band, info strip,
+   itemized tables, highlighted grand total). Reuses the app's existing
+   design tokens (--color-primary/--status-success-*) rather than hardcoded
+   colors, so it stays correct in both light and dark mode automatically. */
+.slip-card { padding: 0; overflow: hidden; }
+.slip-card__body { padding: 20px 22px 22px; }
+.slip-header {
+  background: var(--color-primary); color: var(--color-on-primary);
+  padding: 20px 22px; display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap;
+}
+.slip-header__brand { display: flex; align-items: center; gap: 12px; }
+.slip-logo {
+  width: 44px; height: 44px; border-radius: 10px; flex-shrink: 0;
+  background: rgba(255, 255, 255, 0.16); display: flex; align-items: center; justify-content: center; overflow: hidden;
+}
+.slip-logo img { width: 100%; height: 100%; object-fit: cover; }
+.slip-company { font-family: var(--font-display); font-weight: 800; font-size: 16px; letter-spacing: .2px; }
+.slip-title-badge {
+  font-family: var(--font-display); font-weight: 800; font-size: 13px; letter-spacing: 1px;
+  text-transform: uppercase; border: 1.5px solid currentColor; border-radius: 999px; padding: 6px 16px;
+}
+.slip-info-row { display: flex; background: var(--color-surface-muted); border-bottom: 1px solid var(--color-border); flex-wrap: wrap; }
+.slip-info-chip { flex: 1 1 33%; min-width: 140px; padding: 13px 18px; border-right: 1px solid var(--color-border); }
+.slip-info-chip:last-child { border-right: none; }
+.slip-info-chip__label { display: block; font-size: 10.5px; text-transform: uppercase; letter-spacing: .5px; color: var(--color-text-low); font-weight: 700; margin-bottom: 3px; }
+.slip-info-chip__value { display: block; font-weight: 800; font-size: 14px; color: var(--color-text-high); }
+.slip-section-title { display: flex; align-items: center; gap: 7px; font-weight: 800; font-size: 13px; text-transform: uppercase; letter-spacing: .3px; color: var(--color-text-medium); margin-bottom: 10px; }
+.slip-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.slip-table th { text-align: left; font-size: 10.5px; text-transform: uppercase; letter-spacing: .4px; color: var(--color-text-low); font-weight: 700; padding: 6px 8px; border-bottom: 1.5px solid var(--color-border-strong); }
+.slip-table td { padding: 8px; border-bottom: 1px solid var(--color-border); }
+.slip-table th.num, .slip-table td.num { text-align: right; }
+.slip-table tbody tr:last-child td { border-bottom: none; }
+.slip-table__total td { font-weight: 800; border-top: 2px solid var(--color-border-strong); border-bottom: none; padding-top: 10px; }
+.slip-grand-total {
+  display: flex; align-items: center; gap: 12px; background: var(--status-success-bg); color: var(--status-success-fg);
+  border-radius: var(--radius-sm); padding: 16px 18px;
+}
+.slip-grand-total__icon { display: flex; align-items: center; justify-content: center; width: 34px; height: 34px; border-radius: 50%; background: var(--status-success-fg); color: var(--color-surface); flex-shrink: 0; }
+.slip-grand-total__label { font-weight: 800; font-size: 13px; letter-spacing: .3px; flex: 1; }
+.slip-grand-total__value { font-weight: 800; font-size: 20px; }
+.slip-signatures { display: flex; justify-content: space-around; gap: 24px; margin-top: 34px; text-align: center; }
+.slip-signature { flex: 1; max-width: 180px; font-size: 12.5px; color: var(--color-text-medium); font-weight: 600; }
+.slip-signature__line { margin-top: 46px; border-top: 1px solid var(--color-border-strong); }
 
 /* Chart */
 .chart-svg-wrap { width: 100%; overflow-x: auto; }
@@ -387,11 +431,26 @@ table.data-table { width: 100%; border-collapse: collapse; min-width: 640px; }
 /* Print (Slip Gaji)                                                       */
 /* ---------------------------------------------------------------------- */
 @media print {
+  @page { size: A5; margin: 10mm; }
   .sidebar, .topbar, .no-print, #toast-stack { display: none !important; }
   .main-col { margin-left: 0 !important; }
   .view-container { padding: 0; max-width: 100%; }
   body { background: #fff; }
   .card { border: 1px solid #ccc; box-shadow: none; }
+
+  /* Slip Gaji print tuning — fit A5 cleanly, nothing cut off mid-section. */
+  .slip-sheet { max-width: 100%; }
+  .slip-card { border: none; }
+  .slip-header { background: #fff !important; color: #000 !important; border-bottom: 2px solid #000; }
+  .slip-title-badge { border-color: #000; }
+  .slip-logo { background: transparent; color: #000; }
+  .slip-info-row { background: #fff; }
+  .slip-card__body { padding: 12px 4px; }
+  .slip-table { font-size: 11.5px; }
+  .slip-grand-total { background: #fff !important; color: #000 !important; border: 1.5px solid #000; }
+  .slip-grand-total__icon { background: #000; color: #fff; }
+  .slip-section-title, .slip-table, .slip-grand-total, .slip-signatures { page-break-inside: avoid; }
+  .slip-signatures { margin-top: 24px; }
 }
 
 /* ---------------------------------------------------------------------- */

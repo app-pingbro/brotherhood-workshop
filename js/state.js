@@ -4,6 +4,7 @@
 // pub/sub so pages can react when those filters change (per spec: the
 // month/period selector and owner filter live once, not duplicated per page).
 // ============================================================================
+import { APP_NAME } from './config.js';
 
 const listeners = new Set();
 
@@ -122,4 +123,17 @@ export function getCompanyLogoUrl() {
   } catch (e) {
     return null;
   }
+}
+
+// Company name — same Settings row pattern as the logo (key 'company_name',
+// seeded by setupAppEnvironment() in Config.gs). Falls back to APP_NAME so
+// the Slip Gaji header never shows a blank company name before lookups have
+// loaded or on a fresh install that hasn't set one.
+export function getCompanyName() {
+  const rows = state.lookups && state.lookups.settings;
+  if (Array.isArray(rows)) {
+    const row = rows.find((r) => r.key === 'company_name');
+    if (row && row.value) return row.value;
+  }
+  return APP_NAME;
 }
