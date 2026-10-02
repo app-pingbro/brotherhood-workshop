@@ -20,11 +20,13 @@
 // below — these only aggregate for DISPLAY and are verified by test to sum
 // back to the exact same gajiKotor/totalPotongan the slip already showed.
 // ============================================================================
-import { fetchSWR, peek } from '../cache.js';
-import { formatCurrency, escapeHtml, skeletonKpis, pick, formatPeriodLabel } from '../ui.js';
+import { fetchSWR, peek, invalidate } from '../cache.js';
+import { postData } from '../api.js';
+import { formatCurrency, escapeHtml, skeletonKpis, pick, formatPeriodLabel, toast } from '../ui.js';
 import { icon } from '../icons.js';
 import { getCurrentPeriod, getLookups, getCompanyLogoUrl, getCompanyName } from '../state.js';
-import { toOptions } from '../lookups.js';
+import { toOptions, ownerOptions } from '../lookups.js';
+import { EXPENSE_OWNERS } from '../config.js';
 
 let selectedEmployeeId = '';
 
@@ -205,6 +207,20 @@ function renderSlip(slip, period, employeeId) {
   const logoUrl = getCompanyLogoUrl();
   const companyName = getCompanyName();
 
+  // Fitur: Slip Gaji - Pilih Pembayar ("Dibayarkan Oleh" PINGBRO/SUNRISE).
+  // slip.payer ({owner_id, owner_code, owner_name, expense_id} | null) comes
+  // straight from computeSalarySlipCore (SalarySlip.gs) — the SAME object a
+  // CLOSED period's frozen snapshot_json carries, so this reads identically
+  // whether the slip is live or locked. The chosen payer's NAME is shown as
+  // a 4th info chip (prints with the slip, per "pilihan pembayar harus
+  // terlihat pada Slip Gaji"); the select+Simpan control below it is the
+  // no-print editor, hidden once the period is locked (assertPeriodOpen on
+  // the backend already blocks the save either way — this just avoids
+  // showing a control that would only error out).
+  const payer = slip.payer || null;
+  const payerOwnerName = payer ? payer.owner_name : '-';
+  const payerOwnerId = payer ? payer.owner_id : '';
+
   root.innerHTML = `
     <div class="slip-sheet">
       ${locked ? `<div class="slip-locked-banner">${icon('lock', 15)} SNAPSHOT CLOSED &mdash; nilai dibekukan saat periode ditutup, tidak dihitung ulang.</div>` : ''}
@@ -223,12 +239,28 @@ function renderSlip(slip, period, employeeId) {
           <div class="slip-info-chip"><span class="slip-info-chip__label">Periode</span><span class="slip-info-chip__value">${escapeHtml(formatPeriodLabel(period))}</span></div>
           <div class="slip-info-chip"><span class="slip-info-chip__label">Nama Pekerja</span><span class="slip-info-chip__value">${escapeHtml(employee ? employee.name : '-')}</span></div>
           <div class="slip-info-chip"><span class="slip-info-chip__label">Status</span><span class="slip-info-chip__value">${locked ? 'Terkunci (Snapshot)' : 'Live'}</span></div>
+          <div class="slip-info-chip"><span class="slip-info-chip__label">Dibayarkan Oleh</span><span class="slip-info-chip__value">${escapeHtml(payerOwnerName)}</span></div>
         </div>
 
         <div class="slip-card__body">
         <div class="flex-between no-print">
           <div></div>
           <button class="btn btn-secondary btn-sm" id="slip-print">${icon('print', 15)} Cetak / Ekspor</button>
+        </div>
+
+        <div class="no-print mt-16" id="slip-payer-editor">
+          <div class="form-grid">
+            <div class="field">
+              <label>Dibayarkan Oleh (Pengeluaran masuk ke Owner ini)</label>
+              <select class="input select-control" id="slip-payer-select" ${locked ? 'disabled' : ''}>
+                <option value="">&mdash; Belum dipilih &mdash;</option>
+                ${ownerOptions(getLookups(), EXPENSE_OWNERS).map((o) => `<option value="${o.value}"${payerOwnerId === o.value ? ' selected' : ''}>${escapeHtml(o.label)}</option>`).join('')}
+              </select>
+            </div>
+          </div>
+          ${locked
+            ? '<p class="text-low mt-8" style="font-size:11.5px;">Periode terkunci &mdash; pembayar tidak dapat diubah lagi.</p>'
+            : `<button class="btn btn-primary btn-sm mt-8" id="slip-payer-save">${icon('check', 14)} Simpan Pembayar</button>`}
         </div>
 
         <div class="mt-20">
@@ -284,4 +316,24 @@ function renderSlip(slip, period, employeeId) {
   `;
 
   document.getElementById('slip-print')?.addEventListener('click', () => window.print());
+
+  document.getElementById('slip-payer-save')?.addEventListener('click', async () => {
+    const select = document.getElementById('slip-payer-select');
+    const saveBtn = document.getElementById('slip-payer-save');
+    const ownerId = select.value;
+    saveBtn.disabled = true;
+    const res = await postData('setSalaryPayer', { period_id: period.id, employee_id: employeeId, owner_id: ownerId });
+    saveBtn.disabled = false;
+    if (res.success) {
+      // Pengeluaran yang baru dibuat/diperbarui/dihapus mempengaruhi Slip
+      // Gaji ini sendiri, halaman Pengeluaran, DAN Dashboard/Rekap Bulanan
+      // (recap.perOwner) — invalidate ketiganya supaya semua tempat segera
+      // menunjukkan angka yang sama, tanpa perlu refresh manual.
+      invalidate('getSalarySlip');
+      invalidate('getExpenses');
+      invalidate('getMonthlyRecap');
+      toast(ownerId ? 'Pembayar gaji disimpan.' : 'Pembayar gaji dikosongkan.', 'success');
+      loadSlip(period, employeeId);
+    }
+  });
 }

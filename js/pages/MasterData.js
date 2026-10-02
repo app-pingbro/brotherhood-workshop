@@ -310,20 +310,22 @@ function fileToBase64(file) {
 
 // ---------------------------------------------------------------------------
 // Reset Data Transaksi ("Zona Berbahaya") — Pengaturan > Sistem. Lets the
-// user pick WHICH categories to wipe (Jahit, Sablon, Gaji Jahit, Gaji
-// Sablon, Gaji Harian, Lembur, Kasbon, Pengeluaran, or "Pilih Semua" of
-// those 8) via backend/Reset.gs's api_resetTransactionData — selecting only
-// Jahit deletes only Jahit; every other category (including Periode, Saldo/
-// Balance, Slip Gaji and Log Aktivitas, which are no longer part of this
-// feature at all) is left completely untouched. Settings/Master Data/User/
-// Login are never touched either way (enforced server-side, this UI only
-// drives the selection + confirmation flow). Backend takes a full
-// spreadsheet backup to Drive BEFORE deleting anything, and the whole
-// action requires the ADMIN_OWNER role.
+// user pick a PERIOD (bulan & tahun) first, then WHICH categories to wipe
+// (Jahit, Sablon, Gaji Jahit, Gaji Sablon, Gaji Harian, Lembur, Kasbon,
+// Pengeluaran, or "Pilih Semua" of those 8) via backend/Reset.gs's
+// api_resetTransactionData — selecting Periode September 2026 + Jahit
+// deletes ONLY Jahit data belonging to September 2026; every other period
+// (and every other category, including Periode, Saldo/Balance, Slip Gaji
+// and Log Aktivitas, which are no longer part of this feature at all) is
+// left completely untouched. Settings/Master Data/User/Login are never
+// touched either way (enforced server-side, this UI only drives the
+// period+selection+confirmation flow). Backend takes a full spreadsheet
+// backup to Drive BEFORE deleting anything, and the whole action requires
+// the ADMIN_OWNER role.
 //
-// Flow: tombol -> pilih kategori (jumlah data per kategori ditampilkan) ->
-// centang "Saya memahami..." + ketik RESET -> Proses Reset -> hasil + link
-// backup.
+// Flow: tombol -> pilih PERIODE -> pilih kategori (jumlah data per kategori
+// PADA PERIODE ITU ditampilkan) -> centang "Saya memahami..." + ketik RESET
+// -> Proses Reset -> hasil + link backup.
 // ---------------------------------------------------------------------------
 const RESET_CATEGORIES = [
   { key: 'jahit', label: 'Jahit', sheetKey: 'SEWING_TRANSACTIONS' },
@@ -366,31 +368,72 @@ async function openResetWizard() {
   openModal({
     title: '⚠️ Reset Data Transaksi',
     size: 'lg',
-    bodyHtml: '<div id="reset-wizard-root"><div class="notice notice-info">Memuat jumlah data...</div></div>',
+    bodyHtml: '<div id="reset-wizard-root"></div>',
     onMount: async (body) => {
       const root = body.querySelector('#reset-wizard-root');
-      let preview;
-      try {
-        preview = await fetchData('getResetPreview', {});
-      } catch (e) {
-        root.innerHTML = `<div class="notice notice-critical">${icon('alert')} Gagal memuat data: ${escapeHtml(e.message)}</div>
-          <div class="form-actions"><button class="btn btn-secondary" id="reset-close-err">Tutup</button></div>`;
-        root.querySelector('#reset-close-err').addEventListener('click', () => closeModal());
-        return;
-      }
-      renderResetStep1(root, preview);
+      renderResetStep0(root);
     }
   });
 }
 
-function renderResetStep1(root, preview) {
+// Step 0 (NEW — "Pilih Periode"): a period must be chosen BEFORE any
+// category/count is shown, since every count and every delete below is now
+// scoped to it. Reuses the SAME period list already cached by getLookups()
+// (state.js) — no separate getPeriods() call — sorted most-recent-first,
+// same ordering router.js's own period <select> already uses.
+function renderResetStep0(root) {
+  const periods = (getLookups()?.periods || [])
+    .slice()
+    .sort((a, b) => (a.year - b.year) || (a.month - b.month))
+    .reverse();
+
+  if (!periods.length) {
+    root.innerHTML = `<div class="notice notice-info">${icon('info')} Belum ada periode. Buat periode terlebih dahulu dari Rekap Bulanan.</div>
+      <div class="form-actions"><button class="btn btn-secondary" id="reset-close-noperiod">Tutup</button></div>`;
+    root.querySelector('#reset-close-noperiod').addEventListener('click', () => closeModal());
+    return;
+  }
+
+  root.innerHTML = `
+    <div class="notice notice-info mb-12">${icon('info', 16)} Pilih periode (bulan &amp; tahun) yang ingin direset. Hanya data pada periode ini yang akan terpengaruh &mdash; periode lain selalu aman.</div>
+    <div class="field mb-12">
+      <label>Periode</label>
+      <select class="input select-control" id="reset-period-select">
+        ${periods.map((p) => `<option value="${p.id}">${escapeHtml(formatPeriodLabel(p))}${String(p.status || '').toLowerCase() === 'closed' ? ' \u{1F512}' : ''}</option>`).join('')}
+      </select>
+    </div>
+    <div class="form-actions">
+      <button type="button" class="btn btn-secondary" id="reset-cancel-0">Batal</button>
+      <button type="button" class="btn btn-primary" id="reset-next-0">Lanjut</button>
+    </div>
+  `;
+  root.querySelector('#reset-cancel-0').addEventListener('click', () => closeModal());
+  root.querySelector('#reset-next-0').addEventListener('click', async () => {
+    const periodId = root.querySelector('#reset-period-select').value;
+    const period = periods.find((p) => String(p.id) === String(periodId));
+    root.innerHTML = '<div class="notice notice-info">Memuat jumlah data periode ini...</div>';
+    let preview;
+    try {
+      preview = await fetchData('getResetPreview', { period_id: periodId });
+    } catch (e) {
+      root.innerHTML = `<div class="notice notice-critical">${icon('alert')} Gagal memuat data: ${escapeHtml(e.message)}</div>
+        <div class="form-actions"><button class="btn btn-secondary" id="reset-close-err">Tutup</button></div>`;
+      root.querySelector('#reset-close-err').addEventListener('click', () => closeModal());
+      return;
+    }
+    renderResetStep1(root, preview, period);
+  });
+}
+
+function renderResetStep1(root, preview, period) {
   const allCats = preview.categories || [];
   const countFor = (sheetKey) => (allCats.find((c) => c.key === sheetKey) || {}).count || 0;
   const items = RESET_CATEGORIES.map((c) => ({ ...c, count: countFor(c.sheetKey) }));
 
   root.innerHTML = `
     <div class="notice notice-critical mb-12">${icon('alert', 16)} Tindakan ini PERMANEN dan tidak dapat dibatalkan. Backup otomatis akan dibuat ke Google Drive sebelum data dihapus.</div>
-    <h4 class="mb-8">Pilih kategori data yang ingin direset:</h4>
+    <p class="mb-8"><button type="button" id="reset-back-0" style="background:none;border:none;color:var(--color-primary);cursor:pointer;padding:0;font-weight:700;font-size:12.5px">&larr; Ganti periode</button></p>
+    <h4 class="mb-8">Periode: ${escapeHtml(formatPeriodLabel(period))} &mdash; pilih kategori data yang ingin direset:</h4>
     <label style="display:flex;gap:8px;align-items:center;cursor:pointer" class="mb-8">
       <input type="checkbox" id="reset-select-all" />
       <strong>Pilih Semua</strong>
@@ -455,19 +498,22 @@ function renderResetStep1(root, preview) {
   ack.addEventListener('change', updateEnabled);
   textInput.addEventListener('input', updateEnabled);
   root.querySelector('#reset-cancel').addEventListener('click', () => closeModal());
+  root.querySelector('#reset-back-0').addEventListener('click', () => renderResetStep0(root));
   proceedBtn.addEventListener('click', () => {
     if (proceedBtn.disabled) return; // guards a double-click
     proceedBtn.disabled = true;
-    runReset(root, ack.checked, textInput.value.trim(), selectedKeys());
+    runReset(root, period, ack.checked, textInput.value.trim(), selectedKeys());
   });
 
   updateEnabled();
 }
 
-async function runReset(root, confirmUnderstood, confirmText, categories) {
-  root.innerHTML = `<div class="notice notice-info">${icon('alert', 15)} Membuat backup otomatis dan menghapus data transaksi... Mohon tunggu, jangan tutup halaman ini.</div>`;
+async function runReset(root, period, confirmUnderstood, confirmText, categories) {
+  root.innerHTML = `<div class="notice notice-info">${icon('alert', 15)} Membuat backup otomatis dan menghapus data transaksi periode ${escapeHtml(formatPeriodLabel(period))}... Mohon tunggu, jangan tutup halaman ini.</div>`;
 
-  const res = await postData('resetTransactionData', { confirm_understood: confirmUnderstood, confirm_text: confirmText, categories });
+  const res = await postData('resetTransactionData', {
+    period_id: period.id, confirm_understood: confirmUnderstood, confirm_text: confirmText, categories
+  });
   if (!res.success) {
     root.innerHTML = `<div class="notice notice-critical">${icon('alert')} ${escapeHtml(res.message || 'Gagal mereset data.')}</div>
       <div class="form-actions"><button class="btn btn-secondary" id="reset-close">Tutup</button></div>`;
@@ -482,12 +528,15 @@ async function runReset(root, confirmUnderstood, confirmText, categories) {
   // simpler and safer to treat as "wipe every cache" than to enumerate each
   // affected action name one by one — cache.js already exposes exactly this.
   // Periode is never deleted by this feature anymore, so there is no stale
-  // current-period id to clear (unlike the old full-reset flow).
+  // current-period id to clear (unlike the old full-reset flow). Only the
+  // CHOSEN period's rows were actually deleted server-side — invalidating
+  // every cached variant here is still correct, it just means every period
+  // (not only this one) re-fetches fresh on next view, which is harmless.
   invalidateAll();
   await refreshLookupsCache();
 
   root.innerHTML = `
-    <div class="notice" style="background:var(--status-success-bg);color:var(--status-success-fg)">${icon('check')} Reset selesai untuk kategori terpilih. Kategori lain, Periode, Saldo, Slip Gaji, dan Log Aktivitas tidak tersentuh.</div>
+    <div class="notice" style="background:var(--status-success-bg);color:var(--status-success-fg)">${icon('check')} Reset selesai untuk kategori terpilih pada periode ${escapeHtml(formatPeriodLabel(period))}. Periode lain, kategori lain, Saldo, Slip Gaji, dan Log Aktivitas tidak tersentuh.</div>
     <pre class="mt-12" style="background:var(--color-surface-muted);color:var(--color-text-high);padding:12px 16px;border-radius:8px;font-family:inherit;line-height:1.6;white-space:pre">${escapeHtml(formatResetLines(data.deletedCounts || [], 'Total dihapus', data.totalDeleted || 0))}</pre>
     <p class="mt-8 text-low">Backup otomatis: <strong>${escapeHtml(data.backup.name)}</strong> &mdash; <a href="${escapeHtml(data.backup.url)}" target="_blank" rel="noopener">buka di Google Drive</a>.</p>
     <div class="form-actions">

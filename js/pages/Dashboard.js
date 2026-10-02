@@ -1,31 +1,54 @@
 // ============================================================================
 // Dashboard — KPI hero cards from getMonthlyRecap (+ PAYROLL_DEDUCTIONS for
-// Total Kasbon), an "Order Berjalan Periode Ini" summary (Jahit/Sablon count
-// & value this period), a merged operational activity feed (Jahit/Sablon/
-// Pengeluaran, most recent first), and the existing secondary stat strip.
+// Total Kasbon), a two-panel PINGBRO/SUNRISE Owner summary, and the existing
+// secondary stat strip.
 //
-// Feature F #2 (redesign): the old "Tren Hasil Bulan" line-chart card and
-// "Transaksi Terbaru" (Jahit/Sablon-only) table card are REMOVED per the
-// user's explicit request, replaced by the two sections above — confirmed
-// via AskUserQuestion that "Status Produksi" and "Deadline Mendekat" (also
-// requested) have NO backing data anywhere in the schema (no status/deadline
-// column on SewingTransactions/PrintingTransactions or anywhere else), so
-// per the user's choice ("Hilangkan keduanya") they are intentionally NOT
-// built here — adding fake data or new DB columns for them was explicitly
-// out of scope. Every number below comes from an existing backend action
-// (getMonthlyRecap / getPayrollDeductions / getSewingTransactions /
-// getPrintingTransactions / getExpenses) — none of it is invented.
+// Fitur: Redesign Dashboard (this change) — the "Order Berjalan Periode
+// Ini"/"Ringkasan Aktivitas Operasional" two-column grid (Jahit/Sablon order
+// counts + a merged activity feed) is REPLACED by two Owner-branded panels
+// (PINGBRO / SUNRISE), per the reference mockup the user attached. Each
+// panel shows Omzet Jahit / Omzet Sablon / Pengeluaran / Total Harus
+// Dibayar (= Omzet Jahit + Omzet Sablon - Pengeluaran, which can be
+// negative if Pengeluaran exceeds Omzet — shown in red when so). All four
+// numbers are read straight off recap.perOwner[ownerId] — the SAME
+// getMonthlyRecap response the KPI row above already fetches (Rekap.gs's
+// computeRecapForPeriod_, perOwner block) — so this redesign needed ZERO
+// new backend calls and can never show a different number than Rekap
+// Bulanan's own per-Owner breakdown for the same period.
+//
+// Three judgment calls made here, disclosed to the user in the delivery
+// report rather than decided silently:
+//   1. Panel accent color: the app's OWN existing Owner identity tokens
+//      (--color-owner-pingbro/--color-owner-sunrise, theme.css — already
+//      used everywhere else for these two Owners) are used instead of the
+//      reference mockup's literal green/orange, so these panels always
+//      match the rest of the app and never drift from it.
+//   2. Month-over-month deltas and "Aktif" badges shown in the reference
+//      mockup are NOT built — there is no stored prior-period comparison
+//      anywhere in this schema for Omzet/Pengeluaran per Owner, and
+//      fabricating one was out of scope ("Gunakan data asli, bukan angka
+//      dummy").
+//   3. The "Buka PINGBRO"/"Buka SUNRISE" CTA button sets the app's existing
+//      Owner filter (setOwnerFilter, same one the top-bar pills use) and
+//      navigates to Rekap Bulanan — the one existing page that already
+//      shows this exact Owner's full per-category breakdown for the
+//      period — rather than inventing per-Owner marketing copy the
+//      reference showed but this schema has no field for.
+//
+// Feature F #2 (earlier redesign, unchanged by this one): the old "Tren
+// Hasil Bulan" line-chart card and "Transaksi Terbaru" table card stay
+// removed; "Status Produksi"/"Deadline Mendekat" stay intentionally not
+// built (no backing data in the schema, confirmed via AskUserQuestion).
 //
 // NOTE (judgment call, inherited): BUILD-SPEC's API contract does not pin
 // the exact JSON field names getMonthlyRecap returns, so this page still
 // reads via ui.pick() trying both totalPemasukan/total_pemasukan-style keys.
 // ============================================================================
-import { fetchData } from '../api.js';
-import { fetchSWR, swr } from '../cache.js';
-import { formatCurrency, formatDateTime, skeletonKpis, emptyState, escapeHtml, pick, badge, formatPeriodLabel, ownerDotClass } from '../ui.js';
+import { fetchSWR } from '../cache.js';
+import { formatCurrency, skeletonKpis, emptyState, escapeHtml, pick, badge, formatPeriodLabel } from '../ui.js';
 import { icon } from '../icons.js';
-import { getCurrentPeriod, getOwnerFilter, getLookups } from '../state.js';
-import { ownerIdByCode, ownerName } from '../lookups.js';
+import { getCurrentPeriod, setOwnerFilter } from '../state.js';
+import { EXPENSE_OWNERS } from '../config.js';
 
 export async function render(container) {
   const period = getCurrentPeriod();
@@ -35,15 +58,9 @@ export async function render(container) {
       <div class="page-header__actions" id="dash-period-badge"></div>
     </div>
     <div id="dash-kpis">${skeletonKpis(5)}</div>
-    <div class="grid grid-2 mt-16">
-      <div class="card">
-        <h3>Order Berjalan Periode Ini</h3>
-        <div id="dash-orders" class="mt-12"><div class="skeleton-line" style="height:130px"></div></div>
-      </div>
-      <div class="card">
-        <h3>Ringkasan Aktivitas Operasional</h3>
-        <div id="dash-activity" class="mt-12"><div class="skeleton-line" style="height:130px"></div></div>
-      </div>
+    <div class="grid grid-2 mt-16" id="dash-owner-panels">
+      <div class="card"><div class="skeleton-line" style="height:190px"></div></div>
+      <div class="card"><div class="skeleton-line" style="height:190px"></div></div>
     </div>
     <div class="mt-16">
       <h3 class="mb-8">Statistik Lain</h3>
@@ -53,25 +70,21 @@ export async function render(container) {
 
   if (!period) {
     document.getElementById('dash-kpis').innerHTML = `<div class="card">${emptyState('Belum ada periode', 'Buat periode pertama dari Rekap Bulanan atau Master Data.', '\u{1F4C5}')}</div>`;
-    document.getElementById('dash-orders').innerHTML = '';
-    document.getElementById('dash-activity').innerHTML = '';
+    document.getElementById('dash-owner-panels').innerHTML = '';
     document.getElementById('dash-stats').innerHTML = '';
     return;
   }
 
   renderPeriodBadge(period);
 
-  // Instant UX (gas-instant-ux Prinsip 2/4 — stale-while-revalidate): each
+  // Instant UX (gas-instant-ux Prinsip 2/4 — stale-while-revalidate): the
   // section paints from cache the moment this function is called (0ms) if a
-  // previous visit to this period/owner already loaded it, then quietly
+  // previous visit to this period already loaded it, then quietly
   // refreshes from the server. On a cold cache this behaves exactly like
-  // before — skeleton, one network round trip, render.
-  const lk = getLookups();
-  const ownerId = ownerIdByCode(lk, getOwnerFilter());
-  await Promise.allSettled([
-    loadRecapSection(period),
-    loadOperationalSection(period, ownerId)
-  ]);
+  // before — skeleton, one network round trip, render. The two Owner panels
+  // are painted from this SAME getMonthlyRecap response (see repaint() in
+  // loadRecapSection below) — no second fetch needed.
+  await loadRecapSection(period);
 }
 
 function renderPeriodBadge(period) {
@@ -96,6 +109,7 @@ async function loadRecapSection(period) {
     if (!latestRecap) return;
     renderKpis(latestRecap, latestDeductions);
     renderStats(latestRecap);
+    renderOwnerPanels(latestRecap);
   };
 
   const recapPromise = fetchSWR('getMonthlyRecap', { period_id: period.id }, (recap) => {
@@ -106,6 +120,7 @@ async function loadRecapSection(period) {
     if (!painted) {
       document.getElementById('dash-kpis').innerHTML = `<div class="notice notice-critical">${icon('alert')} Gagal memuat ringkasan bulan ini.</div>`;
       document.getElementById('dash-stats').innerHTML = '';
+      document.getElementById('dash-owner-panels').innerHTML = `<div class="card">${icon('alert')} Gagal memuat ringkasan Owner.</div>`;
     }
   });
 
@@ -205,104 +220,71 @@ function renderStats(recap) {
   `).join('')}</div>`;
 }
 
-// ---- Order Berjalan + Ringkasan Aktivitas Operasional ----------------------
-// Replaces the old "Tren Hasil Bulan" chart + "Transaksi Terbaru" table.
-// Same underlying actions as before (getSewingTransactions/
-// getPrintingTransactions), PLUS getExpenses so the activity feed reflects
-// operational spending too, not just Jahit/Sablon orders — all real rows for
-// the selected period/owner, nothing summarized or invented.
-async function loadOperationalSection(period, ownerId) {
-  let painted = false;
-  try {
-    await swr(`dashOps::${period.id}::${ownerId || ''}`, () => loadOperationalData(period, ownerId), (data) => {
-      painted = true;
-      renderOrders(data);
-      renderActivity(data.activity);
+// ---- Owner panels (PINGBRO / SUNRISE) ---------------------------------
+// Reads straight off recap.perOwner — the SAME getMonthlyRecap payload the
+// KPI row above already has (Rekap.gs's computeRecapForPeriod_), so no
+// extra network call is made for this redesign. perOwner is keyed by
+// owner id but each entry already carries its own owner_code/owner_name
+// (Rekap.gs), so EXPENSE_OWNERS (['PINGBRO','SUNRISE'], config.js) is just
+// used to pick and order the two panels — BROTHERHOOD has no Pengeluaran of
+// its own (see Expenses.gs/Pengeluaran.js) so it was never part of this
+// panel, same restriction as the rest of the app.
+function renderOwnerPanels(recap) {
+  const root = document.getElementById('dash-owner-panels');
+  if (!root) return;
+  if (!recap) { root.innerHTML = `<div class="card">${icon('alert')} Gagal memuat ringkasan Owner.</div>`; return; }
+
+  const perOwner = recap.perOwner || {};
+  const entries = EXPENSE_OWNERS
+    .map((code) => Object.values(perOwner).find((o) => o.owner_code === code))
+    .filter(Boolean);
+
+  if (!entries.length) {
+    root.innerHTML = `<div class="card">${emptyState('Belum ada data Owner', 'Ringkasan PINGBRO/SUNRISE akan muncul di sini setelah ada transaksi.', '\u{1F4C8}')}</div>`;
+    return;
+  }
+
+  root.innerHTML = entries.map(ownerPanelHtml).join('');
+  root.querySelectorAll('.owner-panel__cta').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      setOwnerFilter(btn.dataset.ownerCode);
+      location.hash = '#/rekap-bulanan';
     });
-  } catch (e) {
-    if (!painted) {
-      document.getElementById('dash-orders').innerHTML = `<div class="notice notice-critical">${icon('alert')} Gagal memuat data order.</div>`;
-      document.getElementById('dash-activity').innerHTML = `<div class="notice notice-critical">${icon('alert')} Gagal memuat aktivitas.</div>`;
-    }
-  }
+  });
 }
 
-async function loadOperationalData(period, ownerId) {
-  const [jahit, sablon, expenses] = await Promise.all([
-    fetchData('getSewingTransactions', { period_id: period.id, owner_id: ownerId }).catch(() => []),
-    fetchData('getPrintingTransactions', { period_id: period.id, owner_id: ownerId }).catch(() => []),
-    fetchData('getExpenses', { period_id: period.id, owner_id: ownerId }).catch(() => [])
-  ]);
-  const jahitRows = jahit || [];
-  const sablonRows = sablon || [];
-  const expenseRows = expenses || [];
+// Total Harus Dibayar = Omzet Jahit + Omzet Sablon - Pengeluaran (per the
+// user's own formula) — can legitimately go negative if Pengeluaran
+// exceeds Omzet this period, shown in red when so, exactly like the
+// existing "Hasil Bersih" KPI card above already does for the same idea.
+function ownerPanelHtml(o) {
+  const jahit = Number(o.jahit) || 0;
+  const sablon = Number(o.sablon) || 0;
+  const pengeluaran = Number(o.pengeluaran) || 0;
+  const totalDibayar = jahit + sablon - pengeluaran;
+  const codeLower = String(o.owner_code || '').toLowerCase();
 
-  const activity = [
-    ...jahitRows.map((r) => ({ ...r, __kind: 'Jahit', __label: r.nama_order, __value: r.total, __at: r.created_at })),
-    ...sablonRows.map((r) => ({ ...r, __kind: 'Sablon', __label: r.nama_desain, __value: r.total, __at: r.created_at })),
-    ...expenseRows.map((r) => ({ ...r, __kind: 'Pengeluaran', __label: expenseTypeName(r), __value: r.nominal, __at: r.created_at }))
-  ].sort((a, b) => new Date(b.__at || 0) - new Date(a.__at || 0)).slice(0, 10);
-
-  return {
-    jahitCount: jahitRows.length,
-    jahitValue: jahitRows.reduce((s, r) => s + (Number(r.total) || 0), 0),
-    sablonCount: sablonRows.length,
-    sablonValue: sablonRows.reduce((s, r) => s + (Number(r.total) || 0), 0),
-    expenseCount: expenseRows.length,
-    activity
-  };
-}
-
-// Sama seperti nameOf() di Pengeluaran.js — resolve expense_type_id ke nama
-// lewat cache getLookups() (bukan panggilan API terpisah).
-function expenseTypeName(row) {
-  const lk = getLookups();
-  const item = (lk?.expenseTypes || []).find((x) => x.id === row.expense_type_id);
-  return item ? item.name : (row.keterangan || 'Pengeluaran');
-}
-
-function ownerCodeOf(lk, ownerId) {
-  return (lk?.owners || []).find((o) => o.id === ownerId)?.code || '';
-}
-
-function renderOrders(data) {
-  const root = document.getElementById('dash-orders');
-  const totalOrders = data.jahitCount + data.sablonCount;
-  if (!totalOrders) {
-    root.innerHTML = emptyState('Belum ada order', 'Order Jahit/Sablon periode ini akan muncul di sini.', '\u{1F9F5}');
-    return;
-  }
-  const jahitPct = totalOrders ? (data.jahitCount / totalOrders) * 100 : 0;
-  root.innerHTML = `
-    <div class="mini-stat-row">
-      <div class="mini-stat"><div class="label">Order Jahit</div><div class="value">${data.jahitCount}</div></div>
-      <div class="mini-stat"><div class="label">Nilai Jahit</div><div class="value">${formatCurrency(data.jahitValue)}</div></div>
-      <div class="mini-stat"><div class="label">Order Sablon</div><div class="value">${data.sablonCount}</div></div>
-      <div class="mini-stat"><div class="label">Nilai Sablon</div><div class="value">${formatCurrency(data.sablonValue)}</div></div>
-    </div>
-    <div class="progress-track mt-12"><div class="progress-fill" style="width:${jahitPct.toFixed(0)}%"></div></div>
-    <div class="progress-label"><span>Jahit ${data.jahitCount} order</span><span>Sablon ${data.sablonCount} order</span></div>
-    <p class="subtitle mt-12">Total ${totalOrders} order tercatat pada periode ini${data.expenseCount ? ` &middot; ${data.expenseCount} transaksi Pengeluaran` : ''}.</p>
-  `;
-}
-
-function renderActivity(rows) {
-  const root = document.getElementById('dash-activity');
-  if (!rows || !rows.length) {
-    root.innerHTML = emptyState('Belum ada aktivitas', 'Aktivitas Jahit/Sablon/Pengeluaran terbaru akan muncul di sini.');
-    return;
-  }
-  const lk = getLookups();
-  const toneByKind = { Jahit: 'success', Sablon: 'neutral', Pengeluaran: 'warning' };
-  root.innerHTML = `<div class="activity-list">${rows.map((r) => {
-    const ownerTag = `<span class="owner-tag"><span class="owner-dot ${ownerDotClass(ownerCodeOf(lk, r.owner_id))}"></span>${escapeHtml(ownerName(lk, r.owner_id))}</span>`;
-    return `<div class="activity-item">
-      ${badge(r.__kind, toneByKind[r.__kind] || 'neutral')}
-      <div class="activity-item__body">
-        <div class="activity-item__title">${escapeHtml(r.__label || '-')}</div>
-        <div class="activity-item__meta">${ownerTag}<span>&middot; ${escapeHtml(formatDateTime(r.__at))}</span></div>
+  return `
+    <div class="card owner-panel owner-panel--${codeLower}">
+      <div class="owner-panel__header">
+        <div class="owner-panel__icon">${icon('building', 18)}</div>
+        <div>
+          <div class="owner-panel__name">${escapeHtml(o.owner_name)}</div>
+          <div class="owner-panel__sub text-low">Ringkasan periode ini</div>
+        </div>
       </div>
-      <div class="activity-item__value">${formatCurrency(r.__value)}</div>
-    </div>`;
-  }).join('')}</div>`;
+      <div class="owner-panel__stats">
+        <div class="owner-panel__stat"><div class="label">Omzet Jahit</div><div class="value">${formatCurrency(jahit)}</div></div>
+        <div class="owner-panel__stat"><div class="label">Omzet Sablon</div><div class="value">${formatCurrency(sablon)}</div></div>
+        <div class="owner-panel__stat"><div class="label">Pengeluaran</div><div class="value">${formatCurrency(pengeluaran)}</div></div>
+        <div class="owner-panel__stat owner-panel__stat--total">
+          <div class="label">Total Harus Dibayar</div>
+          <div class="value" style="color:${totalDibayar >= 0 ? 'var(--status-success-fg)' : 'var(--status-critical-fg)'}">${formatCurrency(totalDibayar)}</div>
+        </div>
+      </div>
+      <button class="btn btn-secondary btn-sm owner-panel__cta" data-owner-code="${escapeHtml(o.owner_code)}">
+        ${icon('chart', 14)} Lihat Detail ${escapeHtml(o.owner_name)}
+      </button>
+    </div>
+  `;
 }

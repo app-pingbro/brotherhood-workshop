@@ -306,9 +306,22 @@ function renderPeriodSelect() {
     .join('');
 }
 
+// Fitur: Dashboard's new "Lihat Detail PINGBRO/SUNRISE" CTA (Dashboard.js)
+// calls setOwnerFilter() directly (not via the pill buttons below), so the
+// top-bar pills need to resync their own is-active class on every 'owner'
+// state change too — otherwise the pill row would still show the
+// PREVIOUSLY selected Owner after that CTA navigates to Rekap Bulanan.
+function syncOwnerPills() {
+  const pillsRoot = document.getElementById('owner-pills');
+  if (!pillsRoot) return;
+  const current = getOwnerFilter();
+  pillsRoot.querySelectorAll('.owner-pill').forEach((b) => b.classList.toggle('is-active', b.dataset.owner === current));
+}
+
 onStateChange((key) => {
   if (key === 'periods' || key === 'lookups') renderPeriodSelect();
   if (key === 'lookups') updateBrandLogo();
+  if (key === 'owner') syncOwnerPills();
 });
 
 // ---------------------------------------------------------------------------
