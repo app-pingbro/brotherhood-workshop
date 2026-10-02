@@ -719,6 +719,7 @@ function statusBadge(r) {
   if (r.status === 'new') return badge('Baru', 'success');
   if (r.status === 'update') return badge('Diperbarui', 'warning');
   if (r.status === 'skip') return badge('Dilewati (sama)', 'neutral');
+  if (r.status === 'duplicate_in_file') return badge('Duplikat dalam file', 'critical');
   return badge(String(r.status), 'neutral');
 }
 
@@ -759,7 +760,7 @@ function renderCategoryPreviewTable(module, cat) {
     <div class="card mb-16">
       <h3 class="mb-8">${escapeHtml(def.label)}
         <span class="text-low" style="font-weight:400;font-size:.85em">
-          (Baru ${cat.summary.newCount} &middot; Diperbarui ${cat.summary.updateCount} &middot; Dilewati ${cat.summary.skipCount} &middot; Gagal ${cat.summary.errorCount})
+          (Baru ${cat.summary.newCount} &middot; Diperbarui ${cat.summary.updateCount} &middot; Dilewati ${cat.summary.skipCount}${cat.summary.duplicateInFileCount ? ` &middot; Duplikat dalam file ${cat.summary.duplicateInFileCount}` : ''} &middot; Gagal ${cat.summary.errorCount})
         </span>
       </h3>
       <div class="table-wrap"><table class="data-table">
@@ -812,6 +813,9 @@ async function runPreview() {
     </div>
     ${totals.updateCount ? `<div class="notice notice-warning mb-16">${icon('alert', 15)}
       Ditemukan ${totals.updateCount} data yang sudah ada.<br>Data tersebut akan diperbarui menggunakan data terbaru dari Excel, bukan diduplikat.
+    </div>` : ''}
+    ${totals.duplicateInFileCount ? `<div class="notice notice-critical mb-16">${icon('alert', 15)}
+      Ditemukan ${totals.duplicateInFileCount} baris yang identik dengan baris lain pada file Excel yang sama (kemungkinan tersalin dua kali).<br>Baris tersebut TIDAK akan diimport — periksa file Excel Anda bila ini tidak disengaja.
     </div>` : ''}
     ${moduleKeys.map((m) => renderCategoryPreviewTable(m, wiz.preview.categories[m])).join('')}
     <div class="form-actions">
