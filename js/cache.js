@@ -15,7 +15,19 @@
 import { fetchData } from './api.js';
 
 const mem = new Map(); // cacheKey -> { data, ts }
+const inflight = new Map(); // cacheKey -> Promise of a NON-forced fetch already on the wire
 const PREFIX = 'bw_cache_';
+
+// Navigation epoch (Fitur: optimasi perpindahan tools). The router bumps this
+// every time a page is (re)mounted. A swr() call remembers the epoch it was
+// started in, and when its network response finally arrives, it skips the
+// page-painting `onData` callback if the user has since moved to another page
+// — the response is still written to the cache (so the NEXT visit is instant),
+// it just no longer repaints a screen that belongs to a different page. This
+// is what stops "old page content flashes then disappears" after a fast
+// menu switch, without touching any individual page's code.
+let navEpoch = 0;
+export function bumpNavEpoch() { navEpoch += 1; return navEpoch; }
 
 function readSession(key) {
   try {
@@ -93,11 +105,37 @@ export async function swr(key, fetcher, onData, opts = {}) {
     return entry.data;
   }
 
-  const data = await fetcher();
-  const fresh = { data, ts: Date.now() };
-  mem.set(key, fresh);
-  writeSession(key, fresh);
-  if (typeof onData === 'function') {
+  // De-duplicate identical in-flight reads: rapid menu switching (or a page
+  // that asks for the same action twice) joins the request already on the
+  // wire instead of firing another one to Apps Script. A FORCED read (used
+  // right after a save/delete) never joins an older in-flight request — that
+  // one may have been issued before the write and would return stale data.
+  const epochAtStart = navEpoch;
+  let pending = !opts.force ? inflight.get(key) : null;
+  if (!pending) {
+    pending = (async () => {
+      const data = await fetcher();
+      // If a save/delete invalidated this key (or a newer forced read took
+      // over) while we were waiting, this response may predate that write —
+      // hand it to our own caller but never put it in the shared cache.
+      if (inflight.get(key) === pending) {
+        const fresh = { data, ts: Date.now() };
+        mem.set(key, fresh);
+        writeSession(key, fresh);
+      }
+      return data;
+    })();
+    inflight.set(key, pending);
+    const clear = () => { if (inflight.get(key) === pending) inflight.delete(key); };
+    pending.then(clear, clear);
+  }
+
+  const data = await pending;
+  // Skip repainting if the user navigated elsewhere meanwhile. Forced reads
+  // and `global` callers (router/Master Data pushing lookups into app state)
+  // always run — they update shared state, not a page's own DOM.
+  const stale = epochAtStart !== navEpoch && !opts.force && !opts.global;
+  if (!stale && typeof onData === 'function') {
     try { onData(data, true); } catch (e) { console.error(e); }
   }
   return data;
@@ -118,6 +156,9 @@ export async function fetchSWR(action, params, onData, opts = {}) {
  * that action (different filters/periods) is cleared.
  */
 export function invalidate(action, params) {
+  // Anything already on the wire for this action was issued BEFORE the write
+  // that is calling invalidate() — never let a later read join it.
+  [...inflight.keys()].forEach((k) => { if (params === undefined ? k.startsWith(action + '::') : k === cacheKey(action, params)) inflight.delete(k); });
   if (params === undefined) {
     [...mem.keys()].forEach((k) => { if (k.startsWith(action + '::')) mem.delete(k); });
     try {
@@ -132,11 +173,13 @@ export function invalidate(action, params) {
 }
 
 export function invalidateKey(key) {
+  inflight.delete(key);
   mem.delete(key);
   removeSession(key);
 }
 
 export function invalidatePrefix(prefix) {
+  [...inflight.keys()].forEach((k) => { if (k.startsWith(prefix)) inflight.delete(k); });
   [...mem.keys()].forEach((k) => { if (k.startsWith(prefix)) mem.delete(k); });
   try {
     Object.keys(sessionStorage)
@@ -146,6 +189,7 @@ export function invalidatePrefix(prefix) {
 }
 
 export function invalidateAll() {
+  inflight.clear();
   mem.clear();
   try {
     Object.keys(sessionStorage).filter((k) => k.startsWith(PREFIX)).forEach((k) => sessionStorage.removeItem(k));

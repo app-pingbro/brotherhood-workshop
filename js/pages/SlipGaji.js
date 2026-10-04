@@ -71,8 +71,15 @@ export async function render(container) {
   else document.getElementById('slip-body').innerHTML = '<div class="empty-state">' + icon('file', 26) + '<div class="empty-state__title mt-8">Pilih pekerja untuk melihat Slip Gaji</div></div>';
 }
 
+// Latest-request-wins guard: picking worker A then quickly worker B must never
+// let A's (slower) response paint over B's slip, nor a response arriving after
+// the user left this page touch the DOM.
+let slipRequestId = 0;
+
 async function loadSlip(period, employeeId) {
   const root = document.getElementById('slip-body');
+  if (!root) return;
+  const reqId = ++slipRequestId;
   const params = { period_id: period.id, employee_id: employeeId };
   // Instant UX: re-picking a worker already viewed this session paints
   // their slip immediately from cache, then quietly refreshes.
@@ -80,9 +87,12 @@ async function loadSlip(period, employeeId) {
   if (cached === undefined) root.innerHTML = skeletonKpis(2);
 
   try {
-    await fetchSWR('getSalarySlip', params, (slip) => renderSlip(slip, period, employeeId));
+    await fetchSWR('getSalarySlip', params, (slip) => {
+      if (reqId !== slipRequestId || !root.isConnected) return;
+      renderSlip(slip, period, employeeId);
+    });
   } catch (e) {
-    if (cached === undefined) {
+    if (cached === undefined && reqId === slipRequestId && root.isConnected) {
       root.innerHTML = `<div class="notice notice-critical">${icon('alert')} Gagal memuat Slip Gaji.</div>`;
     }
   }

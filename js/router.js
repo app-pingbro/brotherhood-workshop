@@ -6,7 +6,7 @@
 import { OWNERS } from './config.js';
 import { icon } from './icons.js';
 import { fetchData } from './api.js';
-import { fetchSWR, invalidate } from './cache.js';
+import { fetchSWR, invalidate, bumpNavEpoch } from './cache.js';
 import {
   getState, onStateChange, getToken, getUser, setLookups, getLookups,
   getCurrentPeriod, setCurrentPeriodId, getOwnerFilter, setOwnerFilter,
@@ -62,6 +62,12 @@ ROUTES['#/login'] = { path: '#/login', page: LoginPage, label: 'Login' };
 let shellBuilt = false;
 let currentPage = null;
 let lookupsLoaded = false;
+// Race guards (Fitur: optimasi perpindahan tools). Every route change/mount
+// takes a ticket; whatever finishes after a NEWER ticket was issued is
+// discarded, so a slow earlier page can never paint over (or replace) the
+// page the user actually ended up on.
+let routeTicket = 0;
+let mountTicket = 0;
 
 export function startRouter() {
   window.addEventListener('hashchange', handleRoute);
@@ -69,6 +75,7 @@ export function startRouter() {
 }
 
 async function handleRoute() {
+  const ticket = ++routeTicket;
   let hash = location.hash || '#/dashboard';
   if (!ROUTES[hash]) hash = isAuthenticated() ? '#/dashboard' : '#/login';
 
@@ -87,7 +94,14 @@ async function handleRoute() {
   if (loginRoot) loginRoot.remove();
   updateUserChip();
 
-  if (!lookupsLoaded) await loadLookups();
+  if (!lookupsLoaded) {
+    // Highlight the clicked menu + title immediately, BEFORE the (possibly
+    // slow, first-visit-only) lookups load, so the click feels instant.
+    setActiveNav(hash);
+    document.getElementById('topbar-title').textContent = ROUTES[hash].label;
+    await loadLookups();
+    if (ticket !== routeTicket) return; // user already clicked elsewhere
+  }
 
   setActiveNav(hash);
   const route = ROUTES[hash];
@@ -110,7 +124,7 @@ async function loadLookups() {
     await fetchSWR('getLookups', {}, (data) => {
       setLookups(data || {});
       renderPeriodSelect();
-    }, { ttlMs: 30 * 60 * 1000 });
+    }, { ttlMs: 30 * 60 * 1000, global: true });
     lookupsLoaded = true;
   } catch (e) {
     // fetchData already toasts; keep app usable, periods dropdown stays empty
@@ -126,24 +140,33 @@ export async function refreshLookups() {
     return await fetchSWR('getLookups', {}, (fresh) => {
       setLookups(fresh || {});
       renderPeriodSelect();
-    }, { force: true });
+    }, { force: true, global: true });
   } catch (e) {
     return null;
   }
 }
 
 async function mountPage(pageModule) {
-  const container = document.getElementById('view');
+  const ticket = ++mountTicket;
+  bumpNavEpoch(); // any still-in-flight read from the previous page must not repaint
+  const view = document.getElementById('view');
   if (currentPage && typeof currentPage.onLeave === 'function') {
     try { currentPage.onLeave(); } catch (e) { /* ignore */ }
   }
   currentPage = pageModule;
-  container.innerHTML = '';
+  // Each page renders into its OWN fresh wrapper. The previous page's wrapper
+  // is detached from the document, so any late DOM write from that page
+  // (timers, in-flight handlers) lands on a detached node — harmless — and can
+  // never hit elements that belong to the newly mounted page.
+  const root = document.createElement('div');
+  root.className = 'page-root';
+  view.replaceChildren(root);
   try {
-    await pageModule.render(container);
+    await pageModule.render(root);
   } catch (err) {
+    if (ticket !== mountTicket) return; // superseded by a newer navigation — don't show its error here
     console.error(err);
-    container.innerHTML = `<div class="card"><div class="notice notice-critical">${icon('alert')} Gagal memuat halaman: ${(err && err.message) || err}</div></div>`;
+    root.innerHTML = `<div class="card"><div class="notice notice-critical">${icon('alert')} Gagal memuat halaman: ${(err && err.message) || err}</div></div>`;
   }
 }
 
