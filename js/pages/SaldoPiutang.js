@@ -4,7 +4,8 @@
 // backend/OwnerLedger.gs) and are read/written through the same three actions:
 //   getOwnerLedger / saveOwnerLedger / voidOwnerLedger.
 //
-//  - Bayar:        openBayarModal()  — opened from the Dashboard owner panels.
+//  - Bayar/Terima: openSettleModal() — opened from the Dashboard owner panels
+//                  (Total > 0 -> Bayar, Total < 0 -> Terima).
 //  - Saldo/Piutang: renderLedgerTab() — a Master Data tab ("Saldo & Piutang
 //                  Awal") that also lists the full Riwayat Pembayaran.
 //
@@ -93,95 +94,139 @@ export function openVoidModal(entry, onDone) {
 }
 
 // ---------------------------------------------------------------------------
-// BAYAR modal (Dashboard)
-// opts: { ownerId, period, total, prefill?, reqId?, onSaved(entry, duplicate) }
-//   total = the Total Harus Dibayar currently shown on the panel.
-// Flow: Total Harus Dibayar -> Bayar -> nominal -> Simpan.
+// BAYAR / TERIMA modal (Dashboard)
+// opts: { ownerId, period, total, saldo, prefill?, reqId?, onSaved(entry, duplicate), onChanged() }
+//   total = Total Harus Dibayar currently shown on the panel
+//           > 0  -> Bayar   (perusahaan membayar Owner; Saldo Perusahaan turun)
+//           < 0  -> Terima  (perusahaan menerima dari Owner; Saldo Perusahaan naik)
+//   saldo = Saldo Perusahaan (Saldo Akhir periode ini) currently shown
+// Flow: Total Harus Dibayar -> Bayar/Terima -> nominal -> Konfirmasi.
 // ---------------------------------------------------------------------------
-export function openBayarModal(opts) {
-  const { ownerId, period, total } = opts;
+const EPS = 0.5;
+const rp = (n) => formatCurrency(n);
+
+function parseDigits(v) { return Number(String(v == null ? '' : v).replace(/[^0-9]/g, '')) || 0; }
+
+export function openSettleModal(opts) {
+  const { ownerId, period } = opts;
+  const total = Number(opts.total) || 0;
+  const saldo = Number(opts.saldo) || 0;
+  if (Math.abs(total) < EPS) { toast('Tidak ada pembayaran: Total Harus Dibayar Rp0.', 'warning'); return; }
+  const kind = total > 0 ? 'PAYMENT' : 'RECEIPT';
+  const isPay = kind === 'PAYMENT';
+  const absTotal = Math.abs(total);
+  const name = ownerName(getLookups(), ownerId);
   const formReqId = opts.reqId || newRequestId(); // one per modal session => double-click can never save twice
   const values = opts.prefill || { nominal: '', tanggal: todayInput(), keterangan: '' };
 
   openModal({
-    title: `Bayar — ${ownerName(getLookups(), ownerId)}`,
+    title: `${isPay ? 'Bayar' : 'Terima'} — ${name}`,
     bodyHtml: `
       <div class="bayar-summary">
-        <div><div class="label">Owner</div><div class="value">${escapeHtml(ownerName(getLookups(), ownerId))}</div></div>
+        <div><div class="label">Owner</div><div class="value">${escapeHtml(name)}</div></div>
         <div><div class="label">Periode</div><div class="value">${escapeHtml(formatPeriodLabel(period))}</div></div>
-        <div class="is-wide"><div class="label">Total Harus Dibayar saat ini</div>
-          <div class="value" style="color:${total > 0 ? 'var(--status-success-fg)' : 'var(--status-critical-fg)'}">${escapeHtml(formatCurrency(total))}</div></div>
+        <div class="is-wide"><div class="label">Total Harus Dibayar</div>
+          <div class="value" style="color:${isPay ? 'var(--status-success-fg)' : 'var(--status-critical-fg)'}">${escapeHtml(rp(total))}</div>
+          <div class="sub">${isPay ? 'Perusahaan harus membayar ' + escapeHtml(name) : 'Perusahaan berhak menerima dari ' + escapeHtml(name)}</div></div>
+        <div><div class="label">Saldo Perusahaan Sebelum</div><div class="value">${escapeHtml(rp(saldo))}</div></div>
+        <div class="is-after"><div class="label">Saldo Perusahaan Sesudah</div><div class="value" id="settle-saldo-after">${escapeHtml(rp(saldo))}</div></div>
+        <div class="is-wide is-after"><div class="label">Sisa Total Harus Dibayar Sesudah</div><div class="value" id="settle-sisa-after">${escapeHtml(rp(total))}</div></div>
       </div>
-      ${total > 0 ? '<button type="button" class="bayar-quickfill" id="bayar-fill">Isi sesuai Total Harus Dibayar</button>' : ''}
+      <button type="button" class="bayar-quickfill" id="bayar-fill">Isi sesuai Total Harus Dibayar (${escapeHtml(rp(absTotal))})</button>
       <div id="bayar-form-root"></div>
-      <h4 class="mt-16 mb-8">Riwayat Pembayaran (${escapeHtml(formatPeriodLabel(period))})</h4>
-      <div id="bayar-history">${skeletonTable(4, 2)}</div>`,
+      <h4 class="mt-16 mb-8">Riwayat (${escapeHtml(name)}, ${escapeHtml(formatPeriodLabel(period))})</h4>
+      <div id="bayar-history">${skeletonTable(5, 2)}</div>`,
     onMount: (body) => {
+      // Live preview of the numbers AFTER this entry (nothing is saved yet).
+      const updatePreview = (raw) => {
+        const n = parseDigits(raw);
+        const saldoEl = body.querySelector('#settle-saldo-after');
+        const sisaEl = body.querySelector('#settle-sisa-after');
+        if (saldoEl) saldoEl.textContent = rp(saldo + (isPay ? -n : n));
+        if (sisaEl) sisaEl.textContent = rp(total + (isPay ? -n : n));
+      };
+      updatePreview(values.nominal);
+
       buildForm(body.querySelector('#bayar-form-root'), [
-        { key: 'nominal', label: 'Nominal yang Dibayarkan', type: 'number', required: true, min: 1,
-          hint: total > 0 ? `Pembayaran mengurangi Total Harus Dibayar. Maksimal ${formatCurrency(total)}.` : 'Tidak ada tagihan yang tersisa untuk periode ini.' },
-        { key: 'tanggal', label: 'Tanggal Pembayaran', type: 'date', required: true },
+        { key: 'nominal', label: isPay ? 'Nominal Pembayaran' : 'Nominal Diterima', type: 'number', required: true, min: 1,
+          onChange: (vals) => updatePreview(vals.nominal),
+          hint: isPay ? `Pembayaran mengurangi Total Harus Dibayar dan Saldo Perusahaan. Maksimal ${rp(absTotal)}.`
+                      : `Penerimaan menambah Saldo Perusahaan dan menggeser Total Harus Dibayar ke Rp0. Maksimal ${rp(absTotal)}.` },
+        { key: 'tanggal', label: isPay ? 'Tanggal Pembayaran' : 'Tanggal Penerimaan', type: 'date', required: true },
         { key: 'keterangan', label: 'Keterangan (opsional)', type: 'textarea', fullWidth: true }
       ], values, null, async (v) => {
         const nominal = Number(v.nominal) || 0;
-        const payload = (allowOver) => ({
-          kind: 'PAYMENT', owner_id: ownerId, period_id: period.id, tanggal: v.tanggal,
-          nominal, keterangan: v.keterangan || '', req_id: formReqId, ...(allowOver ? { allow_over: true } : {})
+        const flags = {};
+        const payload = () => ({
+          kind, owner_id: ownerId, period_id: period.id, tanggal: v.tanggal,
+          nominal, keterangan: v.keterangan || '', req_id: formReqId, ...flags
         });
-        let res = await postData('saveOwnerLedger', payload(false), { silent: true });
-        if (!res.success && res.code === 'OVERPAY') {
-          const ok = await confirmDialog(`${res.message} Tetap catat sebagai kelebihan bayar?`, { confirmLabel: 'Ya, catat', tone: 'primary' });
-          if (!ok) { openBayarModal({ ...opts, prefill: { ...v }, reqId: formReqId }); return; } // keep what the user typed
-          res = await postData('saveOwnerLedger', payload(true), { silent: true });
+        let res = await postData('saveOwnerLedger', payload(), { silent: true });
+        // Server asks for confirmation (nominal > Total, or Saldo Perusahaan would go negative).
+        for (let guard = 0; guard < 3 && !res.success && (res.code === 'OVERPAY' || res.code === 'SALDO_KURANG'); guard++) {
+          const ok = await confirmDialog(`${res.message} Tetap lanjutkan?`, { confirmLabel: 'Ya, lanjutkan', tone: 'primary' });
+          if (!ok) { openSettleModal({ ...opts, prefill: { ...v }, reqId: formReqId }); return; } // keep what the user typed
+          if (res.code === 'OVERPAY') flags.allow_over = true; else flags.allow_saldo_minus = true;
+          res = await postData('saveOwnerLedger', payload(), { silent: true });
         }
-        if (!res.success) { toast(res.message || 'Gagal menyimpan pembayaran.', 'error'); return; }
-        toast(res.data && res.data.duplicate ? 'Pembayaran ini sudah tercatat sebelumnya — tidak dicatat dua kali.' : 'Pembayaran tersimpan.', 'success');
+        if (!res.success) {
+          toast(res.message || 'Gagal menyimpan.', 'error');
+          if (res.code === 'NO_DUE' || res.code === 'WRONG_DIRECTION') { closeModal(); if (opts.onChanged) opts.onChanged(); }
+          return;
+        }
+        toast(res.data && res.data.duplicate
+          ? 'Sudah tercatat sebelumnya — tidak dicatat dua kali.'
+          : (isPay ? 'Pembayaran tersimpan.' : 'Penerimaan tersimpan.'), 'success');
         invalidateLedgerCaches();
         closeModal();
         if (opts.onSaved) opts.onSaved(res.data && res.data.entry, Boolean(res.data && res.data.duplicate));
-      }, { submitLabel: 'Simpan' });
+      }, { submitLabel: isPay ? 'Konfirmasi Bayar' : 'Konfirmasi Terima' });
 
-      const fill = body.querySelector('#bayar-fill');
-      if (fill) {
-        fill.addEventListener('click', () => {
-          const input = body.querySelector('input[name="nominal"]');
-          if (!input) return;
-          input.value = String(Math.round(total));
-          input.dispatchEvent(new Event('input', { bubbles: true })); // runs the shared currency-mask handler
-          input.focus();
-        });
-      }
+      body.querySelector('#bayar-fill').addEventListener('click', () => {
+        const input = body.querySelector('input[name="nominal"]');
+        if (!input) return;
+        input.value = String(Math.round(absTotal));
+        input.dispatchEvent(new Event('input', { bubbles: true })); // runs the shared currency-mask handler (+ live preview)
+        input.focus();
+      });
 
       loadHistory(body.querySelector('#bayar-history'), ownerId, period, opts);
     }
   });
 }
 
+// Backwards-compatible name (older imports).
+export const openBayarModal = openSettleModal;
+
+const SETTLE_KINDS = ['PAYMENT', 'RECEIPT'];
+const kindTag = (k) => `<span class="kind-tag kind-tag--${escapeHtml(k)}">${k === 'RECEIPT' ? 'Terima' : 'Bayar'}</span>`;
+
 function loadHistory(root, ownerId, period, opts) {
-  const params = { kind: 'PAYMENT', owner_id: ownerId, period_id: period.id };
-  const paint = (rows) => {
+  const params = { owner_id: ownerId, period_id: period.id };
+  const paint = (all) => {
     if (!root.isConnected) return;
-    if (!rows || !rows.length) { root.innerHTML = '<div class="text-low" style="font-size:13px">Belum ada pembayaran untuk periode ini.</div>'; return; }
+    const rows = (all || []).filter((r) => SETTLE_KINDS.includes(r.kind));
+    if (!rows.length) { root.innerHTML = '<div class="text-low" style="font-size:13px">Belum ada pembayaran/penerimaan untuk periode ini.</div>'; return; }
     root.innerHTML = historyTable(rows, true);
     wireVoidButtons(root, rows, () => {
-      // after a void: the open Bayar modal is replaced by the reason modal, so
-      // reopen it with fresh numbers via the caller.
+      // after a void: the open modal is replaced by the reason modal, so refresh via the caller.
       if (opts.onChanged) opts.onChanged();
     });
   };
   const cached = peek('getOwnerLedger', params);
   if (cached !== undefined) paint(cached);
   fetchSWR('getOwnerLedger', params, paint, { ttlMs: 5000 }).catch(() => {
-    if (root.isConnected && cached === undefined) root.innerHTML = `<div class="notice notice-critical">${icon('alert')} Gagal memuat riwayat pembayaran.</div>`;
+    if (root.isConnected && cached === undefined) root.innerHTML = `<div class="notice notice-critical">${icon('alert')} Gagal memuat riwayat.</div>`;
   });
 }
 
 function historyTable(rows, compact) {
   return `<div class="table-wrap"><table class="data-table">
-    <thead><tr>${compact ? '' : '<th>Owner</th><th>Periode</th>'}<th>Tanggal</th><th class="num">Nominal</th><th>Keterangan</th><th>Status</th><th class="num">Aksi</th></tr></thead>
+    <thead><tr>${compact ? '' : '<th>Owner</th><th>Periode</th>'}<th>Jenis</th><th>Tanggal</th><th class="num">Nominal</th><th>Keterangan</th><th>Status</th><th class="num">Aksi</th></tr></thead>
     <tbody>${rows.map((r, i) => `
       <tr data-i="${i}" class="${r.status === 'void' ? 'ledger-row--void' : ''}">
         ${compact ? '' : `<td>${ownerTag(r.owner_id)}</td><td>${escapeHtml(periodLabelById(r.period_id))}</td>`}
+        <td>${kindTag(r.kind)}</td>
         <td>${escapeHtml(formatDate(r.tanggal))}</td>
         <td class="num"><strong>${escapeHtml(formatCurrency(r.nominal))}</strong></td>
         <td>${escapeHtml(r.keterangan || '-')}</td>
@@ -232,8 +277,8 @@ export function renderLedgerTab(body) {
         <div data-list>${skeletonTable(6, 2)}</div>
       </div>`).join('')}
     <div class="card" id="led-PAYMENT">
-      <div class="ledger-section-head"><h3>Riwayat Pembayaran</h3></div>
-      <p class="ledger-hint">Semua pembayaran "Total Harus Dibayar" yang dicatat dari Dashboard (tombol Bayar). Pembayaran yang salah dapat dibatalkan — catatannya tetap tersimpan di sini.</p>
+      <div class="ledger-section-head"><h3>Riwayat Pembayaran &amp; Penerimaan</h3></div>
+      <p class="ledger-hint">Semua Bayar / Terima "Total Harus Dibayar" yang dicatat dari Dashboard. Yang salah dapat dibatalkan — catatannya tetap tersimpan di sini. Bayar/Terima memindahkan kas (Saldo Perusahaan), bukan Pengeluaran.</p>
       <div data-list>${skeletonTable(7, 2)}</div>
     </div>`;
 
@@ -245,7 +290,7 @@ export function renderLedgerTab(body) {
     if (!body.isConnected) return;
     const all = Array.isArray(rows) ? rows : [];
     ['SALDO_AWAL', 'PIUTANG_AWAL'].forEach((kind) => paintOpening(body, kind, all.filter((r) => r.kind === kind)));
-    paintPayments(body, all.filter((r) => r.kind === 'PAYMENT'));
+    paintPayments(body, all.filter((r) => SETTLE_KINDS.includes(r.kind)));
   };
 
   function reload() {
@@ -291,7 +336,7 @@ function paintOpening(body, kind, rows) {
 function paintPayments(body, rows) {
   const root = body.querySelector('#led-PAYMENT [data-list]');
   if (!root) return;
-  if (!rows.length) { root.innerHTML = emptyState('Belum ada pembayaran', 'Pembayaran dicatat dari tombol Bayar di Dashboard.', '\u{1F4B3}'); return; }
+  if (!rows.length) { root.innerHTML = emptyState('Belum ada pembayaran', 'Bayar / Terima dicatat dari tombol di panel Dashboard.', '\u{1F4B3}'); return; }
   root.innerHTML = historyTable(rows, false);
   wireVoidButtons(root, rows, () => body.__reloadLedger && body.__reloadLedger());
 }

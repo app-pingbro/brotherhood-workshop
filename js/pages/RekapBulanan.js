@@ -186,7 +186,11 @@ function renderSaldo(recap, period) {
   const saldoAwalInput = Number(recap.saldoAwalAwal) || 0;
   const saldoAwalFinal = pick(recap, ['saldoAwalFinal', 'saldo_awal_final'], saldoAwalOtomatis + saldoAwalKoreksi + saldoAwalInput);
   const hasilBulan = pick(recap, ['hasilBulan', 'hasil_bulan']);
-  const saldoAkhir = pick(recap, ['saldoAkhir', 'saldo_akhir'], saldoAwalFinal + hasilBulan);
+  // Bayar / Terima Owner (Dashboard) — perpindahan kas, BUKAN Pengeluaran/Pemasukan,
+  // jadi tidak ikut Hasil Bulan; hanya menggeser Saldo Akhir. 0 sampai dipakai.
+  const bayarOwner = Number(recap.pembayaranOwner) || 0;
+  const terimaOwner = Number(recap.penerimaanOwner) || 0;
+  const saldoAkhir = pick(recap, ['saldoAkhir', 'saldo_akhir'], saldoAwalFinal + hasilBulan - bayarOwner + terimaOwner);
 
   root.innerHTML = `
     <div class="saldo-boxes">
@@ -201,6 +205,8 @@ function renderSaldo(recap, period) {
     </div>
     <div class="grid grid-kpi mt-16">
       <div class="card kpi-card"><div class="label">Hasil Bulan</div><div class="value">${formatCurrency(hasilBulan)}</div></div>
+      ${bayarOwner !== 0 ? `<div class="card kpi-card"><div class="label">Pembayaran ke Owner (−)</div><div class="value">${formatCurrency(bayarOwner)}</div><div class="hint text-low" style="font-size:12px">Bayar di Dashboard — mengurangi Saldo, bukan Pengeluaran</div></div>` : ''}
+      ${terimaOwner !== 0 ? `<div class="card kpi-card"><div class="label">Penerimaan dari Owner (+)</div><div class="value">${formatCurrency(terimaOwner)}</div><div class="hint text-low" style="font-size:12px">Terima di Dashboard — menambah Saldo, bukan Pemasukan</div></div>` : ''}
       <div class="card kpi-card kpi-card--accent"><div class="label">Saldo Akhir</div><div class="value">${formatCurrency(saldoAkhir)}</div></div>
       <div class="card kpi-card"><div class="label">Status Periode</div><div class="value" style="font-size:16px">${String(period.status || '-').toUpperCase()}</div></div>
     </div>
@@ -218,13 +224,14 @@ function ownerLedgerTableHtml(recap) {
     <div class="card mt-16">
       <h3 class="mb-8">Piutang &amp; Pembayaran Owner</h3>
       <div class="table-wrap"><table class="data-table">
-        <thead><tr><th>Owner</th><th class="num">Tagihan Periode</th><th class="num">Sisa Periode Lalu</th><th class="num">Piutang Awal</th><th class="num">Sudah Dibayar</th><th class="num">Total Harus Dibayar</th></tr></thead>
+        <thead><tr><th>Owner</th><th class="num">Tagihan Periode</th><th class="num">Sisa Periode Lalu</th><th class="num">Piutang Awal</th><th class="num">Sudah Dibayar</th><th class="num">Sudah Diterima</th><th class="num">Total Harus Dibayar</th></tr></thead>
         <tbody>${rows.map((o) => `<tr>
           <td>${escapeHtml(o.owner_name)}</td>
           <td class="num">${formatCurrency(o.tagihan)}</td>
           <td class="num">${formatCurrency(o.sisa_sebelumnya)}</td>
           <td class="num">${formatCurrency(o.piutang_awal)}</td>
           <td class="num">${formatCurrency(o.dibayar)}</td>
+          <td class="num">${formatCurrency(o.diterima || 0)}</td>
           <td class="num"><strong>${formatCurrency(o.total_harus_dibayar)}</strong></td>
         </tr>`).join('')}</tbody>
       </table></div>

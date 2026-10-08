@@ -49,7 +49,7 @@ import { formatCurrency, skeletonKpis, emptyState, escapeHtml, pick, badge, form
 import { icon } from '../icons.js';
 import { getCurrentPeriod, setOwnerFilter } from '../state.js';
 import { EXPENSE_OWNERS } from '../config.js';
-import { openBayarModal } from './SaldoPiutang.js';
+import { openSettleModal } from './SaldoPiutang.js';
 
 export async function render(container) {
   const period = getCurrentPeriod();
@@ -118,18 +118,29 @@ async function loadRecapSection(period) {
     repaint();
   };
 
-  // Hooks for the "Bayar" button on the owner panels (see openBayarModal in
-  // SaldoPiutang.js). After a payment is saved the panel updates INSTANTLY
-  // (optimistic: the nominal is taken off Total Harus Dibayar right away), then
-  // a forced refetch of the recap reconciles it with the server's numbers.
+  // Hooks for the Bayar / Terima button on the owner panels (see
+  // openSettleModal in SaldoPiutang.js). After a save the dashboard updates
+  // INSTANTLY (optimistic: Total Harus Dibayar and Saldo Perusahaan move right
+  // away), then a forced refetch of the recap reconciles with the server.
   const ctx = {
     period,
     getOwner: (ownerId) => (latestRecap && latestRecap.perOwner ? latestRecap.perOwner[ownerId] : null),
-    patchPaid: (ownerId, nominal) => {
+    getSaldo: () => (latestRecap ? Number(pick(latestRecap, ['saldoAkhir', 'saldo_akhir'])) || 0 : 0),
+    // Bayar (PAYMENT): total shrinks, company saldo shrinks.
+    // Terima (RECEIPT): total moves toward 0 (+), company saldo grows.
+    patchSettled: (ownerId, kind, nominal) => {
       const po = latestRecap && latestRecap.perOwner ? latestRecap.perOwner[ownerId] : null;
-      if (!po) return;
-      po.total_harus_dibayar = ownerTotal(po) - nominal;
-      po.dibayar = (Number(po.dibayar) || 0) + nominal;
+      if (!po || !(nominal > 0)) return;
+      const sign = kind === 'RECEIPT' ? 1 : -1;
+      po.total_harus_dibayar = ownerTotal(po) + sign * nominal;
+      if (kind === 'RECEIPT') {
+        po.diterima = (Number(po.diterima) || 0) + nominal;
+        latestRecap.penerimaanOwner = (Number(latestRecap.penerimaanOwner) || 0) + nominal;
+      } else {
+        po.dibayar = (Number(po.dibayar) || 0) + nominal;
+        latestRecap.pembayaranOwner = (Number(latestRecap.pembayaranOwner) || 0) + nominal;
+      }
+      latestRecap.saldoAkhir = (Number(pick(latestRecap, ['saldoAkhir', 'saldo_akhir'])) || 0) + sign * nominal; // same direction as the total
       repaint();
     },
     refresh: () => fetchSWR('getMonthlyRecap', { period_id: period.id }, onRecap, { force: true }).catch(() => {})
@@ -232,7 +243,7 @@ function renderStats(recap) {
     ['Lembur', pick(gaji, ['lembur', 'totalLembur', 'total_lembur'])],
     ['Pengeluaran PINGBRO', pick(pengeluaran, ['pingbro'])],
     ['Pengeluaran SUNRISE', pick(pengeluaran, ['sunrise'])],
-    ['Saldo Akhir', pick(recap, ['saldoAkhir', 'saldo_akhir'])]
+    ['Saldo Akhir (Saldo Perusahaan)', pick(recap, ['saldoAkhir', 'saldo_akhir'])]
   ];
   root.innerHTML = `<div class="stat-strip">${items.map(([label, val]) => `
     <div class="stat-strip__item"><div class="label">${escapeHtml(label)}</div><div class="value">${formatCurrency(val)}</div></div>
@@ -241,13 +252,18 @@ function renderStats(recap) {
 
 // ---- Owner panels (PINGBRO / SUNRISE) ---------------------------------
 // Reads straight off recap.perOwner — the SAME getMonthlyRecap payload the
-// KPI row above already has (Rekap.gs's computeRecapForPeriod_), so no
-// extra network call is made for this redesign. perOwner is keyed by
-// owner id but each entry already carries its own owner_code/owner_name
-// (Rekap.gs), so EXPENSE_OWNERS (['PINGBRO','SUNRISE'], config.js) is just
-// used to pick and order the two panels — BROTHERHOOD has no Pengeluaran of
-// its own (see Expenses.gs/Pengeluaran.js) so it was never part of this
-// panel, same restriction as the rest of the app.
+// KPI row above already has (Rekap.gs's computeRecapForPeriod_), so no extra
+// network call is made. EXPENSE_OWNERS (['PINGBRO','SUNRISE'], config.js) just
+// picks and orders the two panels; BROTHERHOOD has no Pengeluaran of its own.
+//
+// Alur angka (kiri -> kanan, atas -> bawah):
+//   Omzet Jahit + Omzet Sablon - Pengeluaran   = Hasil Periode (tagihan)
+//   + Piutang Awal + Sisa periode lalu - Dibayar + Diterima = TOTAL HARUS DIBAYAR
+//   Saldo Awal tampil sebagai informasi (kas awal Owner) dan HANYA masuk ke
+//   Saldo Perusahaan — tidak ikut Total Harus Dibayar, supaya tidak dobel.
+// Total > 0  : perusahaan HARUS MEMBAYAR Owner      -> tombol Bayar
+// Total < 0  : perusahaan BERHAK MENERIMA dari Owner -> tombol Terima
+// Total = 0  : "Tidak ada pembayaran", tombol nonaktif
 function renderOwnerPanels(recap, ctx) {
   const root = document.getElementById('dash-owner-panels');
   if (!root) return;
@@ -263,24 +279,29 @@ function renderOwnerPanels(recap, ctx) {
     return;
   }
 
-  root.innerHTML = entries.map(ownerPanelHtml).join('');
+  const closed = String((ctx.period && ctx.period.status) || '').toLowerCase() === 'closed';
+  root.innerHTML = entries.map((o) => ownerPanelHtml(o, closed)).join('');
   root.querySelectorAll('.owner-panel__cta').forEach((btn) => {
     btn.addEventListener('click', () => {
       setOwnerFilter(btn.dataset.ownerCode);
       location.hash = '#/rekap-bulanan';
     });
   });
-  // Total Harus Dibayar -> Bayar -> nominal -> Simpan
+  // Total Harus Dibayar -> Bayar / Terima -> nominal -> Konfirmasi
   root.querySelectorAll('.owner-panel__pay').forEach((btn) => {
     btn.addEventListener('click', () => {
+      if (btn.disabled) return;
       const ownerId = btn.dataset.ownerId;
       const current = ctx.getOwner(ownerId);
-      openBayarModal({
+      const total = current ? ownerTotal(current) : 0;
+      if (Math.abs(total) < SETTLED_EPS) return;
+      openSettleModal({
         ownerId,
         period: ctx.period,
-        total: current ? ownerTotal(current) : 0,
+        total,
+        saldo: ctx.getSaldo(),
         onSaved: (entry, duplicate) => {
-          if (entry && !duplicate) ctx.patchPaid(ownerId, Number(entry.nominal) || 0);
+          if (entry && !duplicate) ctx.patchSettled(ownerId, entry.kind, Number(entry.nominal) || 0);
           ctx.refresh();
         },
         onChanged: () => ctx.refresh()
@@ -289,64 +310,92 @@ function renderOwnerPanels(recap, ctx) {
   });
 }
 
-// Total Harus Dibayar = Omzet Jahit + Omzet Sablon - Pengeluaran (per the
-// user's own formula) — can legitimately go negative if Pengeluaran
-// exceeds Omzet this period, shown in red when so, exactly like the
-// existing "Hasil Bersih" KPI card above already does for the same idea.
-//
-// With the Bayar / Piutang Awal feature the backend (Rekap.gs + OwnerLedger.gs)
-// returns `total_harus_dibayar` = that same formula + Piutang Awal + sisa dari
-// periode sebelumnya − pembayaran. For owners who never used those features it
-// is IDENTICAL to the formula above, and an older backend that doesn't send the
-// field falls back to the formula, so nothing changes until a payment/piutang
-// exists.
+// Rounded-to-the-rupiah comparisons: totals are sums of floats, so "0" means
+// |x| < half a rupiah (same tolerance the backend uses).
+const SETTLED_EPS = 0.5;
+
+// Total Harus Dibayar — backend (Rekap.gs + OwnerLedger.gs) sends
+// `total_harus_dibayar`; an older backend that doesn't falls back to the
+// original formula Omzet Jahit + Omzet Sablon - Pengeluaran.
 function ownerTotal(o) {
   if (o.total_harus_dibayar !== undefined && o.total_harus_dibayar !== null) return Number(o.total_harus_dibayar) || 0;
   return (Number(o.jahit) || 0) + (Number(o.sablon) || 0) - (Number(o.pengeluaran) || 0);
 }
 
-function ownerPanelHtml(o) {
+function ownerPanelHtml(o, closed) {
   const jahit = Number(o.jahit) || 0;
   const sablon = Number(o.sablon) || 0;
   const pengeluaran = Number(o.pengeluaran) || 0;
-  const totalDibayar = ownerTotal(o);
+  const hasil = jahit + sablon - pengeluaran;
+  const total = ownerTotal(o);
   const sisaLalu = Number(o.sisa_sebelumnya) || 0;
   const piutangAwal = Number(o.piutang_awal) || 0;
+  const saldoAwal = Number(o.saldo_awal_input) || 0;
   const dibayar = Number(o.dibayar) || 0;
-  const codeLower = String(o.owner_code || '').toLowerCase();
+  const diterima = Number(o.diterima) || 0;
+  const code = String(o.owner_code || '');
+  const codeLower = code.toLowerCase();
+  const name = String(o.owner_name || code);
 
-  const breakdown = [];
-  if (sisaLalu !== 0) breakdown.push(`Sisa periode lalu ${formatCurrency(sisaLalu)}`);
-  if (piutangAwal !== 0) breakdown.push(`Piutang Awal ${formatCurrency(piutangAwal)}`);
-  if (dibayar !== 0) breakdown.push(`Sudah dibayar ${formatCurrency(dibayar)}`);
+  const mode = total > SETTLED_EPS ? 'PAYMENT' : (total < -SETTLED_EPS ? 'RECEIPT' : 'NONE');
+  const caption = mode === 'PAYMENT' ? 'Perusahaan harus membayar'
+    : (mode === 'RECEIPT' ? 'Perusahaan berhak menerima' : 'Tidak ada pembayaran');
+  const valueColor = mode === 'RECEIPT' ? 'var(--status-critical-fg)' : (mode === 'PAYMENT' ? 'var(--status-success-fg)' : 'var(--color-text-high)');
+
+  const chips = [];
+  if (sisaLalu !== 0) chips.push(`Sisa periode lalu ${formatCurrency(sisaLalu)}`);
+  if (piutangAwal !== 0) chips.push(`Piutang Awal ${formatCurrency(piutangAwal)}`);
+  if (dibayar !== 0) chips.push(`Sudah dibayar ${formatCurrency(dibayar)}`);
+  if (diterima !== 0) chips.push(`Sudah diterima ${formatCurrency(diterima)}`);
+
+  const actionBtn = mode === 'NONE'
+    ? `<button type="button" class="btn btn-secondary owner-panel__pay" data-mode="NONE" data-owner-id="${escapeHtml(o.owner_id)}" disabled>${icon('check', 15)} Tidak ada pembayaran</button>`
+    : `<button type="button" class="btn btn-primary owner-panel__pay" data-mode="${mode}" data-owner-id="${escapeHtml(o.owner_id)}">${icon(mode === 'PAYMENT' ? 'wallet' : 'arrowDown', 15)} ${mode === 'PAYMENT' ? 'Bayar' : 'Terima'}</button>`;
 
   return `
-    <div class="card owner-panel owner-panel--${codeLower}">
-      <div class="owner-panel__header">
-        <div class="owner-panel__icon">${icon('building', 18)}</div>
-        <div>
-          <div class="owner-panel__name">${escapeHtml(o.owner_name)}</div>
-          <div class="owner-panel__sub text-low">Ringkasan periode ini</div>
+    <section class="card owner-panel owner-panel--${codeLower}" data-owner-code="${escapeHtml(code)}">
+      <header class="op-head">
+        <div class="op-avatar">${icon(codeLower === 'sunrise' ? 'sun' : 'building', 22)}</div>
+        <div class="op-title">
+          <h2 class="op-name owner-panel__name">${escapeHtml(name)}</h2>
+          <div class="op-sub">Ringkasan keuangan periode ini</div>
+        </div>
+        <span class="op-badge ${closed ? 'op-badge--closed' : ''}">${closed ? 'Ditutup' : 'Aktif'}</span>
+      </header>
+
+      <div class="op-stats">
+        <div class="op-stat"><div class="op-stat__icon">${icon('scissors', 16)}</div><div class="op-stat__label">Omzet Jahit</div><div class="op-stat__value">${formatCurrency(jahit)}</div></div>
+        <div class="op-stat"><div class="op-stat__icon">${icon('shirt', 16)}</div><div class="op-stat__label">Omzet Sablon</div><div class="op-stat__value">${formatCurrency(sablon)}</div></div>
+        <div class="op-stat op-stat--neg"><div class="op-stat__icon">${icon('wallet', 16)}</div><div class="op-stat__label">Pengeluaran</div><div class="op-stat__value">${formatCurrency(pengeluaran)}</div></div>
+        <div class="op-stat ${hasil < 0 ? 'op-stat--neg' : ''}" title="Omzet Jahit + Omzet Sablon − Pengeluaran"><div class="op-stat__icon">${icon('coins', 16)}</div><div class="op-stat__label">Hasil Periode</div><div class="op-stat__value" style="color:${hasil < 0 ? 'var(--status-critical-fg)' : 'inherit'}">${formatCurrency(hasil)}</div></div>
+      </div>
+
+      <div class="op-open">
+        <div class="op-open__item op-open__item--saldo">
+          <div class="op-open__icon">${icon('wallet', 18)}</div>
+          <div class="op-open__body"><div class="op-open__label">Saldo Awal ${escapeHtml(name)}</div><div class="op-open__value">${formatCurrency(saldoAwal)}</div></div>
+          <span class="op-info" title="Saldo kas awal ${escapeHtml(name)} yang diinput di Master Data > Saldo &amp; Piutang Awal untuk periode ini. Masuk ke Saldo Perusahaan, bukan ke Total Harus Dibayar.">${icon('info', 15)}</span>
+        </div>
+        <div class="op-open__item op-open__item--piutang">
+          <div class="op-open__icon">${icon('users', 18)}</div>
+          <div class="op-open__body"><div class="op-open__label">Piutang ${escapeHtml(name)}</div><div class="op-open__value">${formatCurrency(piutangAwal)}</div></div>
+          <span class="op-info" title="Piutang Awal ${escapeHtml(name)} yang diinput untuk periode ini. Menambah Total Harus Dibayar.">${icon('info', 15)}</span>
         </div>
       </div>
-      <div class="owner-panel__stats">
-        <div class="owner-panel__stat"><div class="label">Omzet Jahit</div><div class="value">${formatCurrency(jahit)}</div></div>
-        <div class="owner-panel__stat"><div class="label">Omzet Sablon</div><div class="value">${formatCurrency(sablon)}</div></div>
-        <div class="owner-panel__stat"><div class="label">Pengeluaran</div><div class="value">${formatCurrency(pengeluaran)}</div></div>
-        <div class="owner-panel__stat owner-panel__stat--total">
-          <div class="label">Total Harus Dibayar</div>
-          <div class="value" style="color:${totalDibayar >= 0 ? 'var(--status-success-fg)' : 'var(--status-critical-fg)'}">${formatCurrency(totalDibayar)}</div>
-          ${breakdown.length ? `<div class="owner-panel__breakdown">${breakdown.map((t) => `<span>${escapeHtml(t)}</span>`).join('')}</div>` : ''}
+
+      <div class="op-total op-total--${mode.toLowerCase()} owner-panel__stat--total">
+        <div class="op-total__icon">${icon('coins', 22)}</div>
+        <div class="op-total__main">
+          <div class="op-total__label label">Total Harus Dibayar ${escapeHtml(name)}</div>
+          <div class="op-total__value value" style="color:${valueColor}">${formatCurrency(total)}</div>
+          <div class="op-total__caption">${caption}</div>
+          ${chips.length ? `<div class="op-total__chips owner-panel__breakdown">${chips.map((t) => `<span>${escapeHtml(t)}</span>`).join('')}</div>` : ''}
+        </div>
+        <div class="owner-panel__actions">
+          ${actionBtn}
+          <button type="button" class="btn btn-secondary owner-panel__cta" data-owner-code="${escapeHtml(code)}">${icon('chart', 15)} Lihat Detail ${escapeHtml(name)}</button>
         </div>
       </div>
-      <div class="owner-panel__actions">
-        <button class="btn btn-primary btn-sm owner-panel__pay" data-owner-id="${escapeHtml(o.owner_id)}" data-owner-code="${escapeHtml(o.owner_code)}">
-          ${icon('wallet', 14)} Bayar
-        </button>
-        <button class="btn btn-secondary btn-sm owner-panel__cta" data-owner-code="${escapeHtml(o.owner_code)}">
-          ${icon('chart', 14)} Lihat Detail ${escapeHtml(o.owner_name)}
-        </button>
-      </div>
-    </div>
+    </section>
   `;
 }

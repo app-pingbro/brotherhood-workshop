@@ -525,52 +525,112 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 }
 .mini-stat .value { font-family: var(--font-display); font-size: 16px; font-weight: 800; margin-top: 4px; }
 
-/* ---- Dashboard — Owner panels (Fitur: Redesign Dashboard) --------------
-   Replaces the old "Order Berjalan"/"Ringkasan Aktivitas" activity-feed
-   cards (.activity-list/.activity-item*, removed — no longer referenced by
-   Dashboard.js) with a two-panel PINGBRO/SUNRISE layout. Each panel is
-   accented with that Owner's OWN existing identity token
-   (--color-owner-pingbro/--color-owner-sunrise, theme.css) rather than the
-   reference mockup's literal green/orange, so it always matches the colors
-   already used for that Owner everywhere else in this app (owner-dot,
-   owner-pill, owner-tag). ------------------------------------------------ */
-.owner-panel { display: flex; flex-direction: column; gap: 14px; border-top: 4px solid var(--color-border); }
-.owner-panel--pingbro { border-top-color: var(--color-owner-pingbro); }
-.owner-panel--sunrise { border-top-color: var(--color-owner-sunrise); }
-.owner-panel__header { display: flex; align-items: center; gap: 10px; }
-.owner-panel__icon {
-  width: 38px; height: 38px; border-radius: var(--radius-sm); flex-shrink: 0;
-  display: flex; align-items: center; justify-content: center;
-  background: var(--color-owner-pingbro); color: var(--color-surface);
+/* ---- Dashboard — Owner panels (PINGBRO / SUNRISE) -----------------------
+   Card-based, dark-first (works in light too: only theme tokens + two fixed
+   brand fills). PINGBRO = identitas hijau, SUNRISE = ungu/oranye. The accent
+   lives in three local custom properties so the markup stays identical for
+   both owners. Other pages keep using --color-owner-* (unchanged). --------- */
+.owner-panel {
+  --op-fg: var(--status-success-fg);
+  --op-tint: var(--status-success-bg);
+  --op-line: rgba(16, 185, 129, .38);
+  --op-avatar: linear-gradient(135deg, #10B981, #047857);
+  display: flex; flex-direction: column; gap: 14px; padding: 18px;
+  border: 1px solid var(--op-line); border-top: 3px solid var(--op-fg);
+  background: linear-gradient(180deg, var(--op-tint) 0%, transparent 38%), var(--color-surface);
 }
-.owner-panel--sunrise .owner-panel__icon { background: var(--color-owner-sunrise); color: #fff; }
-.owner-panel__name { font-family: var(--font-display); font-weight: 800; font-size: 15px; }
-.owner-panel__sub { font-size: 11.5px; margin-top: 1px; }
-.owner-panel__stats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
-.owner-panel__stat { background: var(--color-surface-muted); border-radius: var(--radius-md, 10px); padding: 10px 12px; }
-.owner-panel__stat .label {
-  font-size: 11px; color: var(--color-text-low); font-weight: 700;
-  text-transform: uppercase; letter-spacing: .03em;
+.owner-panel--sunrise {
+  --op-fg: var(--status-highlight-fg);
+  --op-tint: var(--status-highlight-bg);
+  --op-line: rgba(139, 92, 246, .40);
+  --op-avatar: linear-gradient(135deg, #8B5CF6, #F59E0B);
 }
-.owner-panel__stat .value { font-family: var(--font-display); font-size: 15px; font-weight: 800; margin-top: 4px; }
-.owner-panel__stat--total { grid-column: 1 / -1; }
-.owner-panel__stat--total .value { font-size: 18px; }
-.owner-panel__cta { align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; }
+.op-head { display: flex; align-items: center; gap: 12px; }
+.op-avatar {
+  width: 46px; height: 46px; border-radius: 50%; flex-shrink: 0; color: #fff;
+  display: flex; align-items: center; justify-content: center; background: var(--op-avatar);
+  box-shadow: 0 4px 14px var(--op-tint);
+}
+.op-title { min-width: 0; flex: 1; }
+.op-name { margin: 0; font-family: var(--font-display); font-weight: 800; font-size: 18px; letter-spacing: .01em; }
+.op-sub { font-size: 12.5px; color: var(--color-text-medium); margin-top: 2px; }
+.op-badge {
+  display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; border-radius: 999px;
+  font-size: 12.5px; font-weight: 700; background: var(--status-success-bg); color: var(--status-success-fg); white-space: nowrap;
+}
+.op-badge::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+.op-badge--closed { background: var(--color-surface-muted); color: var(--color-text-medium); }
 
-@media (max-width: 640px) {
-  .owner-panel__stats { grid-template-columns: 1fr 1fr; }
+.op-stats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+.op-stat { background: var(--color-surface-muted); border: 1px solid var(--color-border); border-radius: 12px; padding: 12px; min-width: 0; }
+.op-stat__icon {
+  width: 30px; height: 30px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+  background: var(--op-tint); color: var(--op-fg); margin-bottom: 8px;
 }
+.op-stat--neg .op-stat__icon { background: var(--status-critical-bg); color: var(--status-critical-fg); }
+.op-stat__label { font-size: 12px; color: var(--color-text-medium); }
+.op-stat__value { font-family: var(--font-display); font-size: 16px; font-weight: 800; margin-top: 3px; overflow-wrap: break-word; white-space: nowrap; }
 
-/* ---- Bayar (Dashboard) + Saldo & Piutang Awal ----------------------------- */
+.op-open {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 10px;
+  border: 1px dashed var(--op-line); border-radius: 14px;
+}
+.op-open__item { display: flex; align-items: center; gap: 12px; min-width: 0; padding: 4px 6px; }
+.op-open__icon {
+  width: 38px; height: 38px; border-radius: 50%; flex-shrink: 0; display: flex; align-items: center; justify-content: center;
+  background: var(--status-info-bg); color: var(--status-info-fg);
+}
+.op-open__item--piutang .op-open__icon { background: var(--status-critical-bg); color: var(--status-critical-fg); }
+.op-open__body { min-width: 0; flex: 1; }
+.op-open__label { font-size: 12.5px; color: var(--color-text-medium); }
+.op-open__value { font-family: var(--font-display); font-size: 17px; font-weight: 800; margin-top: 2px; overflow-wrap: anywhere; }
+.op-info { color: var(--color-text-low); cursor: help; flex-shrink: 0; display: inline-flex; }
+
+.op-total {
+  margin-top: auto;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 14px; padding: 14px;
+  border-radius: 14px; background: var(--color-surface-muted); border: 1px solid var(--color-border);
+}
+.op-total__icon {
+  width: 44px; height: 44px; border-radius: 50%; flex-shrink: 0; display: flex; align-items: center; justify-content: center;
+  background: var(--op-tint); color: var(--op-fg);
+}
+.op-total__main { flex: 1 1 200px; min-width: 0; }
+.op-total__label { font-size: 12.5px; font-weight: 700; letter-spacing: .03em; text-transform: uppercase; color: var(--color-text-medium); }
+.op-total__value { font-family: var(--font-display); font-size: 26px; font-weight: 800; line-height: 1.15; margin-top: 2px; overflow-wrap: anywhere; }
+.op-total__caption { font-size: 12.5px; color: var(--color-text-medium); margin-top: 2px; }
+.op-total__chips { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 11.5px; color: var(--color-text-low); }
+.op-total__chips span { white-space: nowrap; }
 .owner-panel__actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-.owner-panel__breakdown { margin-top: 6px; font-size: 11.5px; line-height: 1.5; color: var(--color-text-low); }
-.owner-panel__breakdown span { white-space: nowrap; margin-right: 10px; display: inline-block; }
+.owner-panel__pay { font-weight: 700; min-height: 40px; }
+.owner-panel__pay[data-mode="PAYMENT"] { background: #10B981; border-color: #10B981; color: #04251a; }
+.owner-panel__pay[data-mode="RECEIPT"] { background: #F59E0B; border-color: #F59E0B; color: #2a1800; }
+.owner-panel__pay:disabled { opacity: .55; cursor: not-allowed; background: var(--color-surface); border-color: var(--color-border-strong); color: var(--color-text-medium); }
+.owner-panel__cta { display: inline-flex; align-items: center; gap: 6px; min-height: 40px; }
+
+/* 4 kartu angka sebaris hanya bila panelnya cukup lebar (container query); selain itu 2x2 */
+.owner-panel { container-type: inline-size; }
+@container (min-width: 620px) { .op-stats { grid-template-columns: repeat(4, 1fr); } }
+@media (max-width: 640px) {
+  .owner-panel { padding: 14px; }
+  .op-open { grid-template-columns: 1fr; }
+  .op-total__value { font-size: 22px; }
+  .owner-panel__actions { width: 100%; }
+  .owner-panel__actions .btn { flex: 1 1 140px; justify-content: center; }
+}
+
+/* ---- Bayar / Terima modal + Saldo & Piutang Awal -------------------------- */
 .bayar-summary { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-bottom: 14px; }
-.bayar-summary > div { background: var(--color-surface-muted); border-radius: var(--radius-md, 10px); padding: 8px 12px; }
+.bayar-summary > div { background: var(--color-surface-muted); border-radius: var(--radius-md, 10px); padding: 8px 12px; min-width: 0; }
 .bayar-summary .label { font-size: 11px; color: var(--color-text-low); text-transform: uppercase; letter-spacing: .04em; }
-.bayar-summary .value { font-family: var(--font-display); font-weight: 800; font-size: 15px; margin-top: 2px; }
+.bayar-summary .value { font-family: var(--font-display); font-weight: 800; font-size: 15px; margin-top: 2px; overflow-wrap: anywhere; }
+.bayar-summary .sub { font-size: 12px; color: var(--color-text-medium); margin-top: 2px; }
 .bayar-summary .is-wide { grid-column: 1 / -1; }
+.bayar-summary .is-after { border: 1px dashed var(--color-border-strong); }
 .bayar-quickfill { background: none; border: 0; padding: 0; color: var(--color-primary, #2563eb); cursor: pointer; font-size: 12.5px; text-decoration: underline; margin: 0 0 8px; }
+.kind-tag { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 11.5px; font-weight: 700; }
+.kind-tag--PAYMENT { background: var(--status-warning-bg); color: var(--status-warning-fg); }
+.kind-tag--RECEIPT { background: var(--status-success-bg); color: var(--status-success-fg); }
 .ledger-row--void td { opacity: .55; text-decoration: line-through; }
 .ledger-row--void td.row-actions, .ledger-row--void td:last-child { text-decoration: none; }
 .ledger-section-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; flex-wrap: wrap; }
