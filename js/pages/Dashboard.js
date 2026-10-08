@@ -49,6 +49,7 @@ import { formatCurrency, skeletonKpis, emptyState, escapeHtml, pick, badge, form
 import { icon } from '../icons.js';
 import { getCurrentPeriod, setOwnerFilter } from '../state.js';
 import { EXPENSE_OWNERS } from '../config.js';
+import { openBayarModal } from './SaldoPiutang.js';
 
 export async function render(container) {
   const period = getCurrentPeriod();
@@ -109,14 +110,32 @@ async function loadRecapSection(period) {
     if (!latestRecap) return;
     renderKpis(latestRecap, latestDeductions);
     renderStats(latestRecap);
-    renderOwnerPanels(latestRecap);
+    renderOwnerPanels(latestRecap, ctx);
   };
-
-  const recapPromise = fetchSWR('getMonthlyRecap', { period_id: period.id }, (recap) => {
+  const onRecap = (recap) => {
     painted = true;
     latestRecap = recap;
     repaint();
-  }).catch(() => {
+  };
+
+  // Hooks for the "Bayar" button on the owner panels (see openBayarModal in
+  // SaldoPiutang.js). After a payment is saved the panel updates INSTANTLY
+  // (optimistic: the nominal is taken off Total Harus Dibayar right away), then
+  // a forced refetch of the recap reconciles it with the server's numbers.
+  const ctx = {
+    period,
+    getOwner: (ownerId) => (latestRecap && latestRecap.perOwner ? latestRecap.perOwner[ownerId] : null),
+    patchPaid: (ownerId, nominal) => {
+      const po = latestRecap && latestRecap.perOwner ? latestRecap.perOwner[ownerId] : null;
+      if (!po) return;
+      po.total_harus_dibayar = ownerTotal(po) - nominal;
+      po.dibayar = (Number(po.dibayar) || 0) + nominal;
+      repaint();
+    },
+    refresh: () => fetchSWR('getMonthlyRecap', { period_id: period.id }, onRecap, { force: true }).catch(() => {})
+  };
+
+  const recapPromise = fetchSWR('getMonthlyRecap', { period_id: period.id }, onRecap).catch(() => {
     if (!painted) {
       document.getElementById('dash-kpis').innerHTML = `<div class="notice notice-critical">${icon('alert')} Gagal memuat ringkasan bulan ini.</div>`;
       document.getElementById('dash-stats').innerHTML = '';
@@ -229,7 +248,7 @@ function renderStats(recap) {
 // used to pick and order the two panels — BROTHERHOOD has no Pengeluaran of
 // its own (see Expenses.gs/Pengeluaran.js) so it was never part of this
 // panel, same restriction as the rest of the app.
-function renderOwnerPanels(recap) {
+function renderOwnerPanels(recap, ctx) {
   const root = document.getElementById('dash-owner-panels');
   if (!root) return;
   if (!recap) { root.innerHTML = `<div class="card">${icon('alert')} Gagal memuat ringkasan Owner.</div>`; return; }
@@ -251,18 +270,55 @@ function renderOwnerPanels(recap) {
       location.hash = '#/rekap-bulanan';
     });
   });
+  // Total Harus Dibayar -> Bayar -> nominal -> Simpan
+  root.querySelectorAll('.owner-panel__pay').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const ownerId = btn.dataset.ownerId;
+      const current = ctx.getOwner(ownerId);
+      openBayarModal({
+        ownerId,
+        period: ctx.period,
+        total: current ? ownerTotal(current) : 0,
+        onSaved: (entry, duplicate) => {
+          if (entry && !duplicate) ctx.patchPaid(ownerId, Number(entry.nominal) || 0);
+          ctx.refresh();
+        },
+        onChanged: () => ctx.refresh()
+      });
+    });
+  });
 }
 
 // Total Harus Dibayar = Omzet Jahit + Omzet Sablon - Pengeluaran (per the
 // user's own formula) — can legitimately go negative if Pengeluaran
 // exceeds Omzet this period, shown in red when so, exactly like the
 // existing "Hasil Bersih" KPI card above already does for the same idea.
+//
+// With the Bayar / Piutang Awal feature the backend (Rekap.gs + OwnerLedger.gs)
+// returns `total_harus_dibayar` = that same formula + Piutang Awal + sisa dari
+// periode sebelumnya − pembayaran. For owners who never used those features it
+// is IDENTICAL to the formula above, and an older backend that doesn't send the
+// field falls back to the formula, so nothing changes until a payment/piutang
+// exists.
+function ownerTotal(o) {
+  if (o.total_harus_dibayar !== undefined && o.total_harus_dibayar !== null) return Number(o.total_harus_dibayar) || 0;
+  return (Number(o.jahit) || 0) + (Number(o.sablon) || 0) - (Number(o.pengeluaran) || 0);
+}
+
 function ownerPanelHtml(o) {
   const jahit = Number(o.jahit) || 0;
   const sablon = Number(o.sablon) || 0;
   const pengeluaran = Number(o.pengeluaran) || 0;
-  const totalDibayar = jahit + sablon - pengeluaran;
+  const totalDibayar = ownerTotal(o);
+  const sisaLalu = Number(o.sisa_sebelumnya) || 0;
+  const piutangAwal = Number(o.piutang_awal) || 0;
+  const dibayar = Number(o.dibayar) || 0;
   const codeLower = String(o.owner_code || '').toLowerCase();
+
+  const breakdown = [];
+  if (sisaLalu !== 0) breakdown.push(`Sisa periode lalu ${formatCurrency(sisaLalu)}`);
+  if (piutangAwal !== 0) breakdown.push(`Piutang Awal ${formatCurrency(piutangAwal)}`);
+  if (dibayar !== 0) breakdown.push(`Sudah dibayar ${formatCurrency(dibayar)}`);
 
   return `
     <div class="card owner-panel owner-panel--${codeLower}">
@@ -280,11 +336,17 @@ function ownerPanelHtml(o) {
         <div class="owner-panel__stat owner-panel__stat--total">
           <div class="label">Total Harus Dibayar</div>
           <div class="value" style="color:${totalDibayar >= 0 ? 'var(--status-success-fg)' : 'var(--status-critical-fg)'}">${formatCurrency(totalDibayar)}</div>
+          ${breakdown.length ? `<div class="owner-panel__breakdown">${breakdown.map((t) => `<span>${escapeHtml(t)}</span>`).join('')}</div>` : ''}
         </div>
       </div>
-      <button class="btn btn-secondary btn-sm owner-panel__cta" data-owner-code="${escapeHtml(o.owner_code)}">
-        ${icon('chart', 14)} Lihat Detail ${escapeHtml(o.owner_name)}
-      </button>
+      <div class="owner-panel__actions">
+        <button class="btn btn-primary btn-sm owner-panel__pay" data-owner-id="${escapeHtml(o.owner_id)}" data-owner-code="${escapeHtml(o.owner_code)}">
+          ${icon('wallet', 14)} Bayar
+        </button>
+        <button class="btn btn-secondary btn-sm owner-panel__cta" data-owner-code="${escapeHtml(o.owner_code)}">
+          ${icon('chart', 14)} Lihat Detail ${escapeHtml(o.owner_name)}
+        </button>
+      </div>
     </div>
   `;
 }

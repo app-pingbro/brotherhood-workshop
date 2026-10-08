@@ -17,6 +17,7 @@
 import { fetchData, postData } from '../api.js';
 import { fetchSWR, peek, invalidate, invalidateAll } from '../cache.js';
 import { buildForm } from './_shared.js';
+import { renderLedgerTab } from './SaldoPiutang.js';
 import {
   formatCurrency, escapeHtml, badge, skeletonTable, emptyState, toast,
   openModal, closeModal, confirmDialog, MONTHS_ID, formatPeriodLabel
@@ -35,6 +36,7 @@ const TABS = [
   { key: 'expenseTypes', label: 'Jenis Pengeluaran' },
   { key: 'users', label: 'Pengguna' },
   { key: 'periods', label: 'Periode' },
+  { key: 'ledger', label: 'Saldo & Piutang Awal' },
   { key: 'settings', label: 'Pengaturan' }
 ];
 
@@ -72,7 +74,12 @@ async function renderTab() {
   // as a separate small view instead of an ENTITY_CONFIG entry.
   if (activeTab === 'periods') { renderPeriodsTab(body); return; }
 
+  // Saldo Awal / Piutang Awal (+ Riwayat Pembayaran) — own module, own API
+  // (getOwnerLedger/saveOwnerLedger/voidOwnerLedger), not the generic CRUD engine.
+  if (activeTab === 'ledger') { renderLedgerTab(body); return; }
+
   const cfg = ENTITY_CONFIG[activeTab];
+  const tabAtStart = activeTab;
   const params = { entity: activeTab };
   // Instant UX: paint the previously-loaded rows for this tab immediately
   // (switching Owner -> Pekerja -> Owner again feels instant), then
@@ -88,9 +95,11 @@ async function renderTab() {
   if (cached !== undefined) renderList(cfg, cached || []);
 
   try {
-    await fetchSWR('getMaster', params, (rows) => renderList(cfg, rows || []));
+    // Guard: the user may have switched tab (or left the page) while the
+    // request was in flight — a late answer must not paint into another tab.
+    await fetchSWR('getMaster', params, (rows) => { if (activeTab === tabAtStart) renderList(cfg, rows || []); });
   } catch (e) {
-    if (cached === undefined) {
+    if (cached === undefined && activeTab === tabAtStart && document.getElementById('md-list')) {
       document.getElementById('md-list').innerHTML = `<div class="notice notice-critical">${icon('alert')} Gagal memuat data.</div>`;
     }
   }
@@ -565,6 +574,7 @@ async function invalidateAfterWrite(entityKey) {
 
 function renderList(cfg, rows) {
   const root = document.getElementById('md-list');
+  if (!root) return;
   if (!rows.length) { root.innerHTML = emptyState(`Belum ada ${cfg.label}`, 'Tambahkan data baru di atas.'); return; }
   root.innerHTML = `<div class="table-wrap"><table class="data-table">
     <thead><tr>${cfg.columns.map((c) => `<th class="${c.align === 'num' ? 'num' : ''}">${escapeHtml(c.label)}</th>`).join('')}<th class="num">Aksi</th></tr></thead>

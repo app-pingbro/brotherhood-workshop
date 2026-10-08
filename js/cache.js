@@ -144,9 +144,22 @@ export async function swr(key, fetcher, onData, opts = {}) {
 /**
  * Stale-while-revalidate for a single plain fetchData(action, params) GET —
  * the common case. See swr() above for the underlying behavior.
+ * opts.silent: no error toast (background prefetch).
  */
 export async function fetchSWR(action, params, onData, opts = {}) {
-  return swr(cacheKey(action, params), () => fetchData(action, params), onData, opts);
+  return swr(cacheKey(action, params), () => fetchData(action, params, { silent: opts.silent }), onData, opts);
+}
+
+/**
+ * Put data we ALREADY have into the cache as if it had just been fetched
+ * (e.g. the reference data the login response carries), so the first screen
+ * paints with zero extra round trips.
+ */
+export function seed(action, params, data) {
+  const key = cacheKey(action, params);
+  const entry = { data, ts: Date.now() };
+  mem.set(key, entry);
+  writeSession(key, entry);
 }
 
 /**
@@ -193,5 +206,22 @@ export function invalidateAll() {
   mem.clear();
   try {
     Object.keys(sessionStorage).filter((k) => k.startsWith(PREFIX)).forEach((k) => sessionStorage.removeItem(k));
+  } catch (e) { /* ignore */ }
+}
+
+/**
+ * Like invalidateAll(), but keeps entries whose key starts with one of
+ * `keepPrefixes`. Used on logout so the login screen can still show the
+ * company logo (it lives inside the cached getLookups payload) — everything
+ * else a user saw is dropped.
+ */
+export function invalidateAllExcept(keepPrefixes) {
+  const keep = (k) => keepPrefixes.some((p) => k.startsWith(p));
+  [...inflight.keys()].forEach((k) => { if (!keep(k)) inflight.delete(k); });
+  [...mem.keys()].forEach((k) => { if (!keep(k)) mem.delete(k); });
+  try {
+    Object.keys(sessionStorage)
+      .filter((k) => k.startsWith(PREFIX) && !keep(k.slice(PREFIX.length)))
+      .forEach((k) => sessionStorage.removeItem(k));
   } catch (e) { /* ignore */ }
 }

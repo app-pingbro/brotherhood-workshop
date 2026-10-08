@@ -181,7 +181,10 @@ function renderSaldo(recap, period) {
   const root = document.getElementById('saldo-section');
   const saldoAwalOtomatis = pick(recap, ['saldoAwalOtomatis', 'saldo_awal_otomatis']);
   const saldoAwalKoreksi = pick(recap, ['saldoAwalKoreksi', 'saldo_awal_koreksi']);
-  const saldoAwalFinal = pick(recap, ['saldoAwalFinal', 'saldo_awal_final'], saldoAwalOtomatis + saldoAwalKoreksi);
+  // Saldo Awal (input) — saldo kas sebelum aplikasi dipakai (Master Data >
+  // Saldo & Piutang Awal). 0 (dan kotaknya tidak tampil) sampai ada yang diinput.
+  const saldoAwalInput = Number(recap.saldoAwalAwal) || 0;
+  const saldoAwalFinal = pick(recap, ['saldoAwalFinal', 'saldo_awal_final'], saldoAwalOtomatis + saldoAwalKoreksi + saldoAwalInput);
   const hasilBulan = pick(recap, ['hasilBulan', 'hasil_bulan']);
   const saldoAkhir = pick(recap, ['saldoAkhir', 'saldo_akhir'], saldoAwalFinal + hasilBulan);
 
@@ -190,6 +193,9 @@ function renderSaldo(recap, period) {
       <div class="saldo-box"><div class="label">Saldo Awal Otomatis</div><div class="value">${formatCurrency(saldoAwalOtomatis)}</div><div class="hint">= Saldo Akhir bulan lalu</div></div>
       <div class="saldo-op">+</div>
       <div class="saldo-box"><div class="label">Koreksi Manual</div><div class="value">${formatCurrency(saldoAwalKoreksi)}</div><div class="hint">tersimpan terpisah</div></div>
+      ${saldoAwalInput !== 0 ? `
+      <div class="saldo-op">+</div>
+      <div class="saldo-box"><div class="label">Saldo Awal (Input)</div><div class="value">${formatCurrency(saldoAwalInput)}</div><div class="hint">sebelum aplikasi dipakai</div></div>` : ''}
       <div class="saldo-op">=</div>
       <div class="saldo-box"><div class="label">Saldo Awal Final</div><div class="value">${formatCurrency(saldoAwalFinal)}</div></div>
     </div>
@@ -198,7 +204,31 @@ function renderSaldo(recap, period) {
       <div class="card kpi-card kpi-card--accent"><div class="label">Saldo Akhir</div><div class="value">${formatCurrency(saldoAkhir)}</div></div>
       <div class="card kpi-card"><div class="label">Status Periode</div><div class="value" style="font-size:16px">${String(period.status || '-').toUpperCase()}</div></div>
     </div>
+    ${ownerLedgerTableHtml(recap)}
   `;
+}
+
+// Piutang & pembayaran PINGBRO/SUNRISE — only shown once at least one of them
+// has a Piutang Awal or a Pembayaran (backend flag ledger_aktif), so Rekap
+// looks exactly as before for anyone not using Bayar / Piutang Awal.
+function ownerLedgerTableHtml(recap) {
+  const rows = Object.values(recap.perOwner || {}).filter((o) => o.ledger_aktif);
+  if (!rows.length) return '';
+  return `
+    <div class="card mt-16">
+      <h3 class="mb-8">Piutang &amp; Pembayaran Owner</h3>
+      <div class="table-wrap"><table class="data-table">
+        <thead><tr><th>Owner</th><th class="num">Tagihan Periode</th><th class="num">Sisa Periode Lalu</th><th class="num">Piutang Awal</th><th class="num">Sudah Dibayar</th><th class="num">Total Harus Dibayar</th></tr></thead>
+        <tbody>${rows.map((o) => `<tr>
+          <td>${escapeHtml(o.owner_name)}</td>
+          <td class="num">${formatCurrency(o.tagihan)}</td>
+          <td class="num">${formatCurrency(o.sisa_sebelumnya)}</td>
+          <td class="num">${formatCurrency(o.piutang_awal)}</td>
+          <td class="num">${formatCurrency(o.dibayar)}</td>
+          <td class="num"><strong>${formatCurrency(o.total_harus_dibayar)}</strong></td>
+        </tr>`).join('')}</tbody>
+      </table></div>
+    </div>`;
 }
 
 // Dipakai bersama oleh renderRingkasan() (5 kartu ringkasan) dan

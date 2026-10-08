@@ -61,6 +61,17 @@ export function setSession(token, user) {
   emit('session');
 }
 
+// Sliding session: the server hands back a fresh token (envelope field
+// `renew`) once the current one is a few hours old. Swap it in without
+// touching the user/session listeners, so nothing re-renders.
+export function setRenewedToken(token) {
+  if (!token || !state.token) return;
+  state.token = token;
+  try {
+    sessionStorage.setItem('bw_session', JSON.stringify({ token, user: state.user }));
+  } catch (e) { /* ignore */ }
+}
+
 export function clearSession() {
   state.token = null;
   state.user = null;

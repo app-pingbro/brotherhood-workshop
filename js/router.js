@@ -3,7 +3,8 @@
 // the shared month/period + owner-unit filters, and swaps page content
 // into #view without ever reloading the document — a true SPA.
 // ============================================================================
-import { OWNERS } from './config.js';
+import { OWNERS, EXPENSE_OWNERS } from './config.js';
+import { ownerIdByCode } from './lookups.js';
 import { icon } from './icons.js';
 import { fetchData } from './api.js';
 import { fetchSWR, invalidate, bumpNavEpoch } from './cache.js';
@@ -170,6 +171,50 @@ async function mountPage(pageModule) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Prefetch (gas-instant-ux-pro): per menu item, the EXACT reads its page
+// issues on mount (same action + params => same cache key), so a prefetched
+// response is served by the page's own fetchSWR as a cache hit. Only pages
+// whose params can be derived without rendering them are listed. A path is
+// prefetched at most once per 20 s, silently (no error toast), and only when
+// the data isn't already fresh in cache (swr's 30 s freshness check).
+// ---------------------------------------------------------------------------
+const lastPrefetch = new Map();
+function prefetchSpecs(path) {
+  const period = getCurrentPeriod();
+  if (!period || !lookupsLoaded) return [];
+  const pid = period.id;
+  const ownerParams = () => ({ period_id: pid, owner_id: ownerIdByCode(getLookups(), getOwnerFilter()) });
+  switch (path) {
+    case '#/dashboard':
+    case '#/rekap-bulanan':
+      return [['getMonthlyRecap', { period_id: pid }], ['getPayrollDeductions', { period_id: pid }]];
+    case '#/jahit': return [['getSewingTransactions', ownerParams()]];
+    case '#/sablon': return [['getPrintingTransactions', ownerParams()]];
+    case '#/pengeluaran': {
+      const code = getOwnerFilter();
+      return [['getExpenses', { period_id: pid, owner_id: ownerIdByCode(getLookups(), EXPENSE_OWNERS.includes(code) ? code : undefined) }]];
+    }
+    case '#/gaji-jahit': return [['getSewingWorkerPayments', { period_id: pid, employee_id: '' }]];
+    case '#/gaji-sablon': return [['getPrintingWorkerPayments', { period_id: pid, employee_id: '' }]];
+    case '#/gaji-harian': return [['getDailyWorkerPayments', { period_id: pid, employee_id: '' }], ['getOvertime', { period_id: pid, employee_id: '' }]];
+    case '#/kasbon': return [['getPayrollDeductions', { period_id: pid, employee_id: '', jenis: '' }]];
+    default: return [];
+  }
+}
+
+function prefetchRoute(path) {
+  if (!isAuthenticated() || location.hash === path) return;
+  const now = Date.now();
+  if (now - (lastPrefetch.get(path) || 0) < 20000) return;
+  const specs = prefetchSpecs(path);
+  if (!specs.length) return;
+  lastPrefetch.set(path, now);
+  specs.forEach(([action, params]) => {
+    fetchSWR(action, params, null, { silent: true, ttlMs: 20000 }).catch(() => { /* background only */ });
+  });
+}
+
 async function refreshCurrentPage() {
   if (currentPage) await mountPage(currentPage);
 }
@@ -236,6 +281,13 @@ function buildShell() {
         location.hash = item.path;
         closeSidebar();
       });
+      // Intent-based prefetch: the moment the pointer is over / a finger touches
+      // a menu item, start loading that page's data so it is already on its way
+      // (or in cache) by the time the click lands. Never runs for items nobody
+      // reaches for, so there are no wasted requests.
+      btn.addEventListener('pointerenter', () => prefetchRoute(item.path));
+      btn.addEventListener('touchstart', () => prefetchRoute(item.path), { passive: true });
+      btn.addEventListener('focus', () => prefetchRoute(item.path));
       navRoot.appendChild(btn);
     });
   });

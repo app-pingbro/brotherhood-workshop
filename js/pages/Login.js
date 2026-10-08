@@ -7,6 +7,7 @@ import { toggleTheme, currentTheme } from '../theme.js';
 import { icon } from '../icons.js';
 import { APP_NAME } from '../config.js';
 import { peek } from '../cache.js';
+import { warmUpServer } from '../api.js';
 
 // Pre-login: there's no authenticated getLookups() call yet (the API
 // requires a token), so this can only use whatever getLookups() payload is
@@ -29,6 +30,9 @@ function cachedLogoUrl() {
 }
 
 export async function render(container) {
+  // Wake the Apps Script instance now (cold start is the slowest part of the
+  // first login) — it runs while the user is typing their credentials.
+  warmUpServer();
   const logoUrl = cachedLogoUrl();
   container.innerHTML = `
     <button class="theme-toggle login-theme-toggle" data-theme-toggle id="login-theme-btn"></button>
@@ -78,17 +82,35 @@ export async function render(container) {
     const notice = document.getElementById('login-notice');
     notice.style.display = 'none';
 
-    const result = await login(email, password);
+    // Cold start can take a few seconds — say so instead of looking frozen.
+    const slowTimer = setTimeout(() => {
+      notice.style.display = 'flex';
+      notice.className = 'notice notice-info mt-16';
+      notice.textContent = 'Menghubungi server, mohon tunggu sebentar…';
+    }, 3500);
 
+    let result;
+    try {
+      result = await login(email, password);
+    } catch (err) {
+      // login() never throws by design; this is a last-resort guard so the
+      // button can never stay stuck on "Memproses..." and the app never crashes.
+      result = { success: false, message: (err && err.message) || 'Login gagal. Silakan coba lagi.' };
+    }
+
+    clearTimeout(slowTimer);
     btn.disabled = false;
     btn.textContent = 'Masuk';
 
     if (result.success) {
+      notice.style.display = 'none';
       location.hash = '#/dashboard';
     } else {
       notice.style.display = 'flex';
       notice.className = 'notice notice-critical mt-16';
-      notice.innerHTML = `${icon('alert')} ${result.message || 'Login gagal.'}`;
+      // textContent-safe: the message can contain server text
+      notice.innerHTML = `${icon('alert')} <span></span>`;
+      notice.querySelector('span').textContent = result.message || 'Login gagal.';
     }
   });
 }
