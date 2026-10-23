@@ -334,56 +334,135 @@ table.data-table { width: 100%; border-collapse: collapse; min-width: 640px; }
 .recap-matrix .metric-label { font-weight: 700; }
 .recap-matrix tr.total-row td { font-weight: 800; border-top: 2px solid var(--color-border-strong); }
 
-/* Slip Gaji */
-.slip-sheet { max-width: 640px; margin: 0 auto; }
+/* Slip Gaji — halaman (toolbar + preview). Isi slip sendiri memakai .sg*  */
+.slip-sheet { max-width: 794px; margin: 0 auto; }
 .slip-locked-banner { background: var(--status-warning-bg); color: var(--status-warning-fg); border-radius: var(--radius-sm); padding: 10px 14px; font-weight: 700; font-size: 12.5px; margin-bottom: 14px; display:flex; align-items:center; gap:8px; }
-.slip-line { display: flex; justify-content: space-between; padding: 7px 0; border-bottom: 1px dashed var(--color-border); font-size: 13px; }
-.slip-line.total { font-weight: 800; font-size: 15px; border-bottom: none; border-top: 2px solid var(--color-border-strong); padding-top: 10px; margin-top: 4px; }
-.slip-line.negative { color: var(--color-red); }
+.slip-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 14px; }
+.slip-toolbar__actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.slip-toolbar__hint { font-size: 11.5px; color: var(--color-text-low); }
+.slip-fit-note { font-size: 11.5px; color: var(--color-text-low); margin-top: 10px; text-align: center; }
 
-/* Slip Gaji — professional document redesign (header band, info strip,
-   itemized tables, highlighted grand total). Reuses the app's existing
-   design tokens (--color-primary/--status-success-*) rather than hardcoded
-   colors, so it stays correct in both light and dark mode automatically. */
-.slip-card { padding: 0; overflow: hidden; }
-.slip-card__body { padding: 20px 22px 22px; }
-.slip-header {
-  background: var(--color-primary); color: var(--color-on-primary);
-  padding: 20px 22px; display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap;
+/* ======================================================================== */
+/* Slip Gaji (.sg) — satu markup untuk preview layar, cetak PDF A4 dan PNG.  */
+/* Seluruh ukuran memakai `em` yang bertumpu pada --sg-fs (diatur fitSlip()  */
+/* agar muat 1 halaman), sehingga mengecil proporsional. Palet terang/gelap  */
+/* dikunci di sini (tidak mengikuti token aplikasi) agar hasil cetak/PNG     */
+/* selalu konsisten; font tetap Inter/Manrope di kedua tema.                 */
+/* ======================================================================== */
+.sg--light {
+  --sg-bg: #ffffff; --sg-card: #ffffff; --sg-tx: #17140d; --sg-mu: #6f6858; --sg-ln: #e8e2d2;
+  --sg-hd: #fdf3d8; --sg-gd: #f5b82e; --sg-gdtx: #94650a; --sg-st: #fdebb8;
+  --sg-paybg: #fff8e5; --sg-paybd: #f0c75e;
+  --sg-okfg: #1e7a3a; --sg-okbg: #d5f2da; --sg-offfg: #8a2a22; --sg-offbg: #fbe0e0;
+  --sg-neg: #b42318; --sg-negbg: #fbe9e7; --sg-on-gd: #1a1405;
 }
-.slip-header__brand { display: flex; align-items: center; gap: 12px; }
-.slip-logo {
-  width: 44px; height: 44px; border-radius: 10px; flex-shrink: 0;
-  background: rgba(255, 255, 255, 0.16); display: flex; align-items: center; justify-content: center; overflow: hidden;
+.sg--dark {
+  --sg-bg: #0b0d10; --sg-card: #11141a; --sg-tx: #f5f5f2; --sg-mu: #9aa0a6; --sg-ln: #2a2d32;
+  --sg-hd: #17140d; --sg-gd: #f5b82e; --sg-gdtx: #f5b82e; --sg-st: #2b2209;
+  --sg-paybg: #17130a; --sg-paybd: #8a6a1e;
+  --sg-okfg: #7be0a0; --sg-okbg: #1f5c33; --sg-offfg: #ff8a8a; --sg-offbg: #3a1518;
+  --sg-neg: #ff8a8a; --sg-negbg: #2a1517; --sg-on-gd: #1a1405;
 }
-.slip-logo img { width: 100%; height: 100%; object-fit: cover; }
-.slip-company { font-family: var(--font-display); font-weight: 800; font-size: 16px; letter-spacing: .2px; }
-.slip-title-badge {
-  font-family: var(--font-display); font-weight: 800; font-size: 13px; letter-spacing: 1px;
-  text-transform: uppercase; border: 1.5px solid currentColor; border-radius: 999px; padding: 6px 16px;
+.sg-measure { position: fixed; left: -99999px; top: 0; width: 190mm; visibility: hidden; pointer-events: none; }
+.sg-sheet { position: relative; width: 190mm; height: 274mm; overflow: hidden; box-sizing: border-box; }
+.sg-sheet--light { background: #ffffff; }
+.sg-sheet--dark { background: #0b0d10; }
+.sg-sheet::after {
+  content: ''; position: absolute; left: 0; bottom: 0; width: 8mm; height: 8mm;
+  background: #f5b82e; clip-path: polygon(0 0, 0 100%, 100% 100%); z-index: 0; pointer-events: none;
 }
-.slip-info-row { display: flex; background: var(--color-surface-muted); border-bottom: 1px solid var(--color-border); flex-wrap: wrap; }
-.slip-info-chip { flex: 1 1 33%; min-width: 140px; padding: 13px 18px; border-right: 1px solid var(--color-border); }
-.slip-info-chip:last-child { border-right: none; }
-.slip-info-chip__label { display: block; font-size: 10.5px; text-transform: uppercase; letter-spacing: .5px; color: var(--color-text-low); font-weight: 700; margin-bottom: 3px; }
-.slip-info-chip__value { display: block; font-weight: 800; font-size: 14px; color: var(--color-text-high); }
-.slip-section-title { display: flex; align-items: center; gap: 7px; font-weight: 800; font-size: 13px; text-transform: uppercase; letter-spacing: .3px; color: var(--color-text-medium); margin-bottom: 10px; }
-.slip-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-.slip-table th { text-align: left; font-size: 10.5px; text-transform: uppercase; letter-spacing: .4px; color: var(--color-text-low); font-weight: 700; padding: 6px 8px; border-bottom: 1.5px solid var(--color-border-strong); }
-.slip-table td { padding: 8px; border-bottom: 1px solid var(--color-border); }
-.slip-table th.num, .slip-table td.num { text-align: right; }
-.slip-table tbody tr:last-child td { border-bottom: none; }
-.slip-table__total td { font-weight: 800; border-top: 2px solid var(--color-border-strong); border-bottom: none; padding-top: 10px; }
-.slip-grand-total {
-  display: flex; align-items: center; gap: 12px; background: var(--status-success-bg); color: var(--status-success-fg);
-  border-radius: var(--radius-sm); padding: 16px 18px;
-}
-.slip-grand-total__icon { display: flex; align-items: center; justify-content: center; width: 34px; height: 34px; border-radius: 50%; background: var(--status-success-fg); color: var(--color-surface); flex-shrink: 0; }
-.slip-grand-total__label { font-weight: 800; font-size: 13px; letter-spacing: .3px; flex: 1; }
-.slip-grand-total__value { font-weight: 800; font-size: 20px; }
-.slip-signatures { display: flex; justify-content: space-around; gap: 24px; margin-top: 34px; text-align: center; }
-.slip-signature { flex: 1; max-width: 180px; font-size: 12.5px; color: var(--color-text-medium); font-weight: 600; }
-.slip-signature__line { margin-top: 46px; border-top: 1px solid var(--color-border-strong); }
+.sg { position: relative; z-index: 1; width: 100%; box-sizing: border-box; background: transparent; color: var(--sg-tx);
+  font-family: var(--font-body); font-size: calc(var(--sg-fs, 12) * 1px); line-height: 1.35; font-variant-numeric: tabular-nums; }
+.sg *, .sg *::before, .sg *::after { box-sizing: border-box; }
+.sg > * + * { margin-top: .85em; }
+.sg svg { display: block; flex: none; }
+
+.sg-head { display: flex; align-items: center; justify-content: space-between; gap: 1em; padding-bottom: .8em; border-bottom: .14em solid var(--sg-gd); }
+.sg-brand { display: flex; align-items: center; gap: .9em; min-width: 0; }
+.sg-logo { width: 4em; height: 4em; border-radius: .7em; overflow: hidden; flex: none; display: flex; align-items: center; justify-content: center;
+  background: var(--sg-gd); color: var(--sg-on-gd); }
+.sg-logo img { width: 100%; height: 100%; object-fit: contain; background: #fff; }
+.sg-logo__ini { font-family: var(--font-display); font-weight: 800; font-size: 1.5em; }
+.sg-co { font-family: var(--font-display); font-weight: 800; font-size: 1.75em; line-height: 1.1; overflow-wrap: anywhere; }
+.sg-tag { font-size: .72em; font-weight: 700; letter-spacing: .14em; color: var(--sg-gdtx); margin-top: .25em; }
+.sg-tag + .sg-tag { color: var(--sg-mu); margin-top: .1em; }
+.sg-title { text-align: right; flex: none; }
+.sg-title__t { font-family: var(--font-display); font-weight: 800; font-size: 1.9em; letter-spacing: .05em; line-height: 1.1; }
+.sg-badge { display: inline-block; margin-top: .35em; padding: .22em 1em; border-radius: 99em; background: var(--sg-gd); color: var(--sg-on-gd);
+  font-weight: 800; font-size: .78em; letter-spacing: .14em; }
+
+.sg-info { display: grid; grid-template-columns: 1.15fr 1.6fr .75fr 1.05fr 1.2fr; border: 1px solid var(--sg-ln); border-radius: .75em; background: var(--sg-card); overflow: hidden; }
+.sg-info__c { padding: .7em .9em; border-right: 1px solid var(--sg-ln); min-width: 0; }
+.sg-info__c:last-child { border-right: none; }
+.sg-lbl { display: block; font-size: .62em; font-weight: 700; text-transform: uppercase; letter-spacing: .11em; color: var(--sg-mu); margin-bottom: .3em; }
+.sg-val { display: block; font-weight: 800; font-size: 1em; overflow-wrap: anywhere; }
+.sg-sub { display: block; font-size: .8em; color: var(--sg-mu); margin-top: .05em; }
+.sg-chip { display: inline-block; padding: .1em .8em; border-radius: 99em; font-weight: 700; font-size: .9em; }
+.sg-chip--ok { background: var(--sg-okbg); color: var(--sg-okfg); }
+.sg-chip--off { background: var(--sg-offbg); color: var(--sg-offfg); }
+
+.sg-card, .sg-box { border: 1px solid var(--sg-ln); border-radius: .75em; background: var(--sg-card); overflow: hidden; }
+.sg-card__h { display: flex; align-items: center; gap: .55em; padding: .6em .9em; background: var(--sg-hd); border-bottom: 1px solid var(--sg-ln);
+  font-weight: 800; font-size: .78em; text-transform: uppercase; letter-spacing: .1em; color: var(--sg-tx); }
+.sg-card__h svg { width: 1.45em; height: 1.45em; color: var(--sg-gdtx); }
+
+.sg-multi { display: grid; grid-template-columns: repeat(var(--sg-n, 1), minmax(0, 1fr)); }
+.sg-multi--2 { --sg-n: 2; }
+.sg-multi--3 { --sg-n: 3; }
+.sg-multi table + table { border-left: 1px solid var(--sg-ln); }
+.sg-table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: .92em; }
+.sg-table .c-no { width: 8%; } .sg-table .c-jn { width: 17%; } .sg-table .c-qt { width: 10%; } .sg-table .c-hg { width: 16%; } .sg-table .c-tt { width: 18%; }
+.sg-table th { text-align: left; font-size: .68em; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: var(--sg-mu); padding: .6em .7em; border-bottom: 1px solid var(--sg-ln); vertical-align: bottom; }
+.sg-table td { padding: .42em .7em; border-bottom: 1px solid var(--sg-ln); vertical-align: top; overflow-wrap: anywhere; }
+.sg-table tbody tr:last-child td { border-bottom: none; }
+.sg-multi--2 .sg-table td { padding: .3em .55em; }
+.sg-multi--3 .sg-table td { padding: .22em .45em; }
+.sg-multi--2 .sg-table th, .sg-multi--3 .sg-table th { padding: .45em .5em; }
+.sg-table .r { text-align: right; }
+.sg-table .b { font-weight: 800; }
+.sg-table .nm { font-weight: 700; }
+
+.sg-two { display: grid; grid-template-columns: 1fr 1fr; gap: .85em; align-items: stretch; }
+.sg-box { display: flex; flex-direction: column; min-width: 0; }
+.sg-box__b { padding: .45em .9em; flex: 1; }
+.sg-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: .6em; align-items: baseline; padding: .42em 0; border-bottom: 1px dashed var(--sg-ln); }
+.sg-row:last-child { border-bottom: none; }
+.sg-row__l { font-weight: 600; overflow-wrap: anywhere; }
+.sg-row__l small { display: block; font-size: .8em; font-weight: 400; color: var(--sg-mu); }
+.sg-row__m { color: var(--sg-mu); font-size: .88em; text-align: right; white-space: nowrap; }
+.sg-row__r { font-weight: 800; text-align: right; white-space: nowrap; }
+.sg-strip { display: flex; align-items: center; justify-content: space-between; gap: .6em; padding: .65em .9em; background: var(--sg-st); font-weight: 800; font-size: .82em; letter-spacing: .06em; }
+.sg-strip b { font-size: 1.3em; letter-spacing: 0; white-space: nowrap; }
+.sg-strip--neg { background: var(--sg-negbg); }
+.sg-strip--neg b { color: var(--sg-neg); }
+
+.sg-pay { display: flex; align-items: center; justify-content: space-between; gap: 1em; padding: 1em 1.3em; background: var(--sg-paybg); border: .13em solid var(--sg-paybd); border-radius: .95em; }
+.sg-pay__main { min-width: 0; }
+.sg-pay__lbl { font-size: .78em; font-weight: 800; letter-spacing: .16em; color: var(--sg-gdtx); }
+.sg-pay__amt { font-family: var(--font-display); font-weight: 800; font-size: 2.7em; line-height: 1.1; margin: .1em 0; overflow-wrap: anywhere; }
+.sg-pay__terb { font-size: .85em; color: var(--sg-mu); }
+.sg-pay__terb span { font-weight: 800; color: var(--sg-tx); font-style: italic; }
+.sg-pay__coin { width: 3.8em; height: 3.8em; border-radius: 50%; background: var(--sg-gd); color: var(--sg-on-gd); display: flex; align-items: center; justify-content: center; flex: none; }
+.sg-pay__coin svg { width: 2em; height: 2em; }
+
+.sg-foot { display: grid; grid-template-columns: 1fr 1fr; gap: 1.2em; align-items: end; padding-left: 0; }
+.sg-notes ul { margin: .1em 0 0; padding-left: 1.15em; font-size: .8em; color: var(--sg-mu); }
+.sg-notes li { margin: .15em 0; }
+.sg-sign { text-align: center; }
+.sg-sign__d { font-size: .85em; color: var(--sg-mu); }
+.sg-sign__cols { display: flex; gap: 1.5em; margin-top: .3em; }
+.sg-sign__cols > div { flex: 1; min-width: 0; font-size: .85em; font-weight: 600; overflow-wrap: anywhere; }
+.sg-sign__ln { height: 3.4em; border-bottom: 1px solid var(--sg-tx); margin-bottom: .3em; }
+
+/* Preview layar: kertas A4 yang diskalakan agar muat lebar kontainer */
+.sg-stage { width: 100%; }
+.sg-paperwrap { margin: 0 auto; position: relative; }
+.sg-paper { width: 210mm; height: 297mm; padding: 10mm; box-sizing: border-box; transform-origin: top left; border-radius: 3px; box-shadow: var(--shadow-lg, 0 8px 30px rgba(0,0,0,.18)); }
+.sg-paper--light { background: #ffffff; }
+.sg-paper--dark { background: #0b0d10; }
+
+/* Host cetak: di luar layar saat normal, satu-satunya yang tampil saat print */
+#slip-print-host { position: fixed; left: -99999px; top: 0; width: 190mm; }
 
 /* Chart */
 .chart-svg-wrap { width: 100%; overflow-x: auto; }
@@ -428,29 +507,26 @@ table.data-table { width: 100%; border-collapse: collapse; min-width: 640px; }
 }
 
 /* ---------------------------------------------------------------------- */
-/* Print (Slip Gaji)                                                       */
+/* Print (Slip Gaji) — A4, SATU halaman. Hanya #slip-print-host yang tampil;  */
+/* semua anak <body> lain disembunyikan, html/body dilepas dari tinggi 100%   */
+/* supaya tidak ada halaman ke-2 kosong.                                      */
 /* ---------------------------------------------------------------------- */
+/* margin 0 -> Chrome/Edge tidak menyisipkan header/footer (tanggal, URL, nomor halaman);
+   margin 10mm dibuat sendiri lewat padding host. Tinggi host 296mm (< 297mm) = pengaman. */
+@page { size: A4; margin: 0; }
 @media print {
-  @page { size: A5; margin: 10mm; }
+  html, body { height: auto !important; min-height: 0 !important; overflow: visible !important; background: #fff !important; }
+  body:not(.has-slip-print) { padding: 10mm; box-sizing: border-box; }
   .sidebar, .topbar, .no-print, #toast-stack { display: none !important; }
   .main-col { margin-left: 0 !important; }
   .view-container { padding: 0; max-width: 100%; }
-  body { background: #fff; }
-  .card { border: 1px solid #ccc; box-shadow: none; }
-
-  /* Slip Gaji print tuning — fit A5 cleanly, nothing cut off mid-section. */
-  .slip-sheet { max-width: 100%; }
-  .slip-card { border: none; }
-  .slip-header { background: #fff !important; color: #000 !important; border-bottom: 2px solid #000; }
-  .slip-title-badge { border-color: #000; }
-  .slip-logo { background: transparent; color: #000; }
-  .slip-info-row { background: #fff; }
-  .slip-card__body { padding: 12px 4px; }
-  .slip-table { font-size: 11.5px; }
-  .slip-grand-total { background: #fff !important; color: #000 !important; border: 1.5px solid #000; }
-  .slip-grand-total__icon { background: #000; color: #fff; }
-  .slip-section-title, .slip-table, .slip-grand-total, .slip-signatures { page-break-inside: avoid; }
-  .slip-signatures { margin-top: 24px; }
+  body.has-slip-print > *:not(#slip-print-host) { display: none !important; }
+  body.has-slip-print #slip-print-host {
+    position: static !important; left: auto !important; width: 210mm; height: 296mm; margin: 0; padding: 10mm; box-sizing: border-box; background: #fff;
+    overflow: hidden; break-inside: avoid; page-break-inside: avoid; page-break-after: avoid; break-after: avoid;
+  }
+  #slip-print-host, #slip-print-host * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  #slip-print-host .sg-sheet { box-shadow: none; }
 }
 
 /* ---------------------------------------------------------------------- */
