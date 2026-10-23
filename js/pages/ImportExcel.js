@@ -556,9 +556,11 @@ function renderStep1(root) {
       Sheet yang dikosongkan tidak akan diproses, dan data yang sudah ada untuk sheet itu tidak akan terhapus.
     </div>
     <div class="notice notice-info mb-12"><div>
-      <strong>ID Transaksi.</strong> Setiap transaksi Jahit, Sablon, Gaji Jahit, Gaji Sablon, dan Pengeluaran punya ID permanen (mis. <code>PGL-7F3K9Q2A</code>) pada kolom <strong>ID Transaksi</strong>.
-      ID inilah yang dipakai mengenali transaksi saat file diimpor ulang: ID sama + isi sama = <em>Tidak berubah</em>, ID sama + isi beda = <em>Diperbarui</em>, ID baru/kosong = <em>Baru</em>.
-      Untuk mengedit data yang sudah ada, klik <strong>Unduh Data Periode (dengan ID)</strong> di kanan atas, ubah di file itu, lalu impor kembali. Jangan mengubah atau menyalin kolom ID. File lama tanpa kolom ID tetap bisa diimpor (dicocokkan lewat isi data).
+      <strong>ID Transaksi</strong> (kolom A) adalah identitas permanen tiap transaksi: awalan jenis + nomor urut minimal 2 digit &mdash;
+      Jahit <code>JHT-01</code>, Sablon <code>SBL-01</code>, Gaji Jahit <code>GJT-01</code>, Gaji Sablon <code>GSB-01</code>, Pengeluaran <code>PGL-01</code> (boleh bertambah: <code>JHT-100</code>).
+      Boleh diketik sendiri atau dikosongkan (otomatis diberi nomor berikutnya). ID sama + isi sama = <em>Tidak berubah</em>, ID sama + nilai berbeda = <em>Diperbarui</em>, ID baru/kosong = <em>Baru</em>.
+      ID yang sudah dipakai transaksi lain, atau formatnya salah, ditampilkan sebagai <em>Konflik</em> dan tidak menimpa data apa pun.
+      Untuk mengedit data yang sudah ada, klik <strong>Unduh Data Periode (dengan ID)</strong>, ubah di file itu, lalu impor kembali. File lama tanpa kolom ID tetap bisa diimpor (dicocokkan lewat isi data).
     </div></div>
     <div class="form-actions">
       <button class="btn btn-primary" id="wiz-next" ${isClosed || !period ? 'disabled' : ''}>Lanjut</button>
@@ -837,7 +839,7 @@ function renderCategoryPreviewTable(module, cat) {
     .sort((a, b) => a.row - b.row);
   const sm = cat.summary;
   const conflictN = (sm.conflictCount || 0) + (sm.duplicateInFileCount || 0);
-  const CLEARABLE = ['format', 'sheet', 'dobel', 'periode'];
+  const CLEARABLE = ['format', 'sheet', 'dobel', 'periode', 'id_terpakai'];
   return `
     <div class="card mb-16" data-cat-card="${module}">
       <h3 class="mb-8">${escapeHtml(def.label)}
@@ -1103,8 +1105,8 @@ async function downloadResultFile(data) {
       const def = ID_SHEETS[m];
       const idByRow = new Map((rowIds[m] || []).map((x) => [x.row, x.trx_id]));
       return {
-        name: def.name, header: def.header.concat([ID_COL]),
-        rows: wiz.categories[m].map((raw, i) => def.keys.map((k) => (raw[k] === undefined ? '' : raw[k])).concat([idByRow.get(i + 1) || raw.trx_id || '']))
+        name: def.name, header: [ID_COL].concat(def.header),
+        rows: wiz.categories[m].map((raw, i) => [idByRow.get(i + 1) || raw.trx_id || ''].concat(def.keys.map((k) => (raw[k] === undefined ? '' : raw[k]))))
       };
     });
     writeIdWorkbook(XLSX, sheets, `Hasil-Import-dengan-ID-${new Date().toISOString().slice(0, 10)}.xlsx`);
@@ -1130,23 +1132,23 @@ async function downloadTemplate() {
     const ownerA = sampleOwnerName(lk);
 
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
-      ['Owner', 'Jenis', 'Order Jahit', 'Jumlah', ID_COL],
-      [ownerA, 'Kaos', 'Order A', 20, ''], [ownerA, 'Longsleeve', 'Order B', 15, '']
+      [ID_COL, 'Owner', 'Jenis', 'Order Jahit', 'Jumlah'],
+      ['JHT-01', ownerA, 'Kaos', 'Order A', 20], ['JHT-02', ownerA, 'Longsleeve', 'Order B', 15]
     ]), 'JAHIT');
 
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
-      ['Owner', 'Jenis', 'Design Sablon', 'Warna', 'Jumlah', ID_COL],
-      [ownerA, 'WATERBASE', 'Logo PINGBRO', 2, 20, ''], [ownerA, 'PLASTISOL', 'Design A', 3, 15, '']
+      [ID_COL, 'Owner', 'Jenis', 'Design Sablon', 'Warna', 'Jumlah'],
+      ['SBL-01', ownerA, 'WATERBASE', 'Logo PINGBRO', 2, 20], ['SBL-02', ownerA, 'PLASTISOL', 'Design A', 3, 15]
     ]), 'SABLON');
 
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
-      ['Pekerja', 'Jenis Pekerjaan', 'Nama Order', 'Jumlah', ID_COL],
-      [pekerja, sampleName(lk, 'sewingJobTypes'), 'Order A', 20, '']
+      [ID_COL, 'Pekerja', 'Jenis Pekerjaan', 'Nama Order', 'Jumlah'],
+      ['GJT-01', pekerja, sampleName(lk, 'sewingJobTypes'), 'Order A', 20]
     ]), 'GAJI JAHIT');
 
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
-      ['Pekerja', 'Jenis Tinta', 'Nama Desain', 'Warna', 'Jumlah', ID_COL],
-      [pekerja, sampleName(lk, 'inkTypes'), 'Design A', 2, 20, '']
+      [ID_COL, 'Pekerja', 'Jenis Tinta', 'Nama Desain', 'Warna', 'Jumlah'],
+      ['GSB-01', pekerja, sampleName(lk, 'inkTypes'), 'Design A', 2, 20]
     ]), 'GAJI SABLON');
 
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
@@ -1160,8 +1162,8 @@ async function downloadTemplate() {
     ]), 'KASBON');
 
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
-      ['Owner', 'Tanggal', 'Jenis Pengeluaran', 'Keterangan', 'Nominal', ID_COL],
-      [ownerA, '2026-09-05', 'Listrik', 'Tagihan bulanan', 250000, '']
+      [ID_COL, 'Owner', 'Tanggal', 'Jenis Pengeluaran', 'Keterangan', 'Nominal'],
+      ['PGL-01', ownerA, '2026-09-05', 'Listrik', 'Tagihan bulanan', 250000]
     ]), 'PENGELUARAN');
 
     XLSX.writeFile(wb, 'Template-Import-Brotherhood.xlsx');
