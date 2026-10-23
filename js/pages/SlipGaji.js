@@ -20,7 +20,7 @@
 // below — these only aggregate for DISPLAY and are verified by test to sum
 // back to the exact same gajiKotor/totalPotongan the slip already showed.
 // ============================================================================
-import { fetchSWR, peek, invalidate } from '../cache.js';
+import { fetchSWR, peek, invalidate, invalidatePrefix } from '../cache.js';
 import { postData } from '../api.js';
 import { formatCurrency, escapeHtml, skeletonKpis, pick, formatPeriodLabel, toast } from '../ui.js';
 import { icon } from '../icons.js';
@@ -342,6 +342,7 @@ function renderSlip(slip, period, employeeId) {
       invalidate('getSalarySlip');
       invalidate('getExpenses');
       invalidate('getMonthlyRecap');
+      invalidatePrefix('dashTrend'); // Komposisi Pengeluaran di Dashboard ikut berubah (Dibayarkan Oleh)
       toast(ownerId ? 'Pembayar gaji disimpan.' : 'Pembayar gaji dikosongkan.', 'success');
       loadSlip(period, employeeId);
     }

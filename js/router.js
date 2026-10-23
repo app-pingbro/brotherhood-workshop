@@ -7,7 +7,7 @@ import { OWNERS, EXPENSE_OWNERS } from './config.js';
 import { ownerIdByCode } from './lookups.js';
 import { icon } from './icons.js';
 import { fetchData } from './api.js';
-import { fetchSWR, invalidate, bumpNavEpoch } from './cache.js';
+import { fetchSWR, fetchDashStats, invalidate, bumpNavEpoch } from './cache.js';
 import {
   getState, onStateChange, getToken, getUser, setLookups, getLookups,
   getCurrentPeriod, setCurrentPeriodId, getOwnerFilter, setOwnerFilter,
@@ -213,6 +213,11 @@ function prefetchRoute(path) {
   specs.forEach(([action, params]) => {
     fetchSWR(action, params, null, { silent: true, ttlMs: 20000 }).catch(() => { /* background only */ });
   });
+  // Dashboard juga butuh statistik grafik (1 request, cache terpisah) — ikut dipanaskan.
+  if (path === '#/dashboard') {
+    const period = getCurrentPeriod();
+    if (period) fetchDashStats(period.id, null, { ttlMs: 20000 }).catch(() => { /* background only */ });
+  }
 }
 
 async function refreshCurrentPage() {

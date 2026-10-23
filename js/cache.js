@@ -151,6 +151,17 @@ export async function fetchSWR(action, params, onData, opts = {}) {
 }
 
 /**
+ * Dashboard statistics (Tren Omzet 6 bulan + Komposisi Pengeluaran) — satu
+ * request getDashboardStats per periode. Kunci cache diawali "dashTrend" supaya
+ * SEMUA tempat yang sudah memanggil invalidatePrefix('dashTrend') setelah
+ * simpan/hapus transaksi (Jahit, Sablon, Gaji, Pengeluaran, Import, Reset)
+ * otomatis ikut membuangnya — tanpa mengubah tempat-tempat itu.
+ */
+export function fetchDashStats(periodId, onData, opts = {}) {
+  return swr(`dashTrend::stats::${periodId}`, () => fetchData('getDashboardStats', { period_id: periodId }, { silent: true }), onData, opts);
+}
+
+/**
  * Put data we ALREADY have into the cache as if it had just been fetched
  * (e.g. the reference data the login response carries), so the first screen
  * paints with zero extra round trips.

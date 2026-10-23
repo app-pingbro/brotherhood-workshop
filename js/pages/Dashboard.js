@@ -44,14 +44,16 @@
 // the exact JSON field names getMonthlyRecap returns, so this page still
 // reads via ui.pick() trying both totalPemasukan/total_pemasukan-style keys.
 // ============================================================================
-import { fetchSWR } from '../cache.js';
+import { fetchSWR, fetchDashStats } from '../cache.js';
 import { formatCurrency, skeletonKpis, emptyState, escapeHtml, pick, badge, formatPeriodLabel } from '../ui.js';
 import { icon } from '../icons.js';
-import { getCurrentPeriod, setOwnerFilter, getUser } from '../state.js';
+import { multiLineChart, donutChart, shortMonthLabel } from '../chart.js';
+import { getCurrentPeriod, getOwnerFilter, setOwnerFilter, getUser } from '../state.js';
 import { EXPENSE_OWNERS } from '../config.js';
 import { openSettleModal } from './SaldoPiutang.js';
 
 export async function render(container) {
+  chartState.stats = null; chartState.sig = ''; chartState.error = false;
   const period = getCurrentPeriod();
   const user = getUser();
   const who = String((user && (user.name || user.email)) || 'Admin').trim().split(/\s+/)[0] || 'Admin';
@@ -69,12 +71,14 @@ export async function render(container) {
       <div class="card"><div class="skeleton-line" style="height:190px"></div></div>
     </div>
     <div class="mt-16 dash-section" id="dash-stats">${skeletonKpis(4)}</div>
+    <div class="mt-16 dash-section" id="dash-charts">${chartsSkeleton()}</div>
   `;
 
   if (!period) {
     document.getElementById('dash-kpis').innerHTML = `<div class="card">${emptyState('Belum ada periode', 'Buat periode pertama dari Rekap Bulanan atau Master Data.', '\u{1F4C5}')}</div>`;
     document.getElementById('dash-owner-panels').innerHTML = '';
     document.getElementById('dash-stats').innerHTML = '';
+    document.getElementById('dash-charts').innerHTML = '';
     return;
   }
 
@@ -173,7 +177,18 @@ async function loadRecapSection(period) {
     repaint();
   }).catch(() => { /* non-fatal — lihat komentar di atas */ });
 
-  await Promise.all([recapPromise, deductionsPromise]);
+  // Statistik grafik: request terpisah & non-fatal (gagal/backend lama => hanya panel grafik yang
+  // menampilkan catatan, kartu & panel Owner tetap normal).
+  const statsPromise = fetchDashStats(period.id, (data) => {
+    const sig = JSON.stringify(data);
+    if (sig === chartState.sig && chartState.stats) return;      // data sama: jangan gambar ulang
+    chartState.sig = sig; chartState.stats = data; chartState.error = false;
+    renderCharts();
+  }).catch(() => {
+    if (!chartState.stats) { chartState.error = true; renderCharts(); }
+  });
+
+  await Promise.all([recapPromise, deductionsPromise, statsPromise]);
 }
 
 // Sama persis dengan rumus di RekapBulanan.js (buildMatrixRows) — dijaga
@@ -295,6 +310,198 @@ function renderStats(recap, deductions) {
     }).join('')}</div>
     <p class="dash-stats__footnote">Persentase = bagian dari Total Pengeluaran. Gaji &amp; Lembur sudah termasuk di Pengeluaran Owner; Kasbon adalah potongan gaji, bukan biaya usaha.</p>
   </section>`;
+}
+
+// ---- Statistik grafik: Tren Omzet 6 Bulan + Komposisi Pengeluaran ------------
+// Satu request getDashboardStats({period_id}) (cache "dashTrend::stats::<periode>",
+// ikut dibuang oleh semua invalidatePrefix('dashTrend') yang sudah ada setelah
+// simpan/hapus transaksi). Filter Owner = filter Owner global (pill di topbar):
+// mengubahnya di sini tidak memicu request — data semua Owner sudah ada di
+// respons, tinggal disaring di browser.
+//   Tren   : Omzet Jahit / Omzet Sablon / Total Omzet per bulan (Jahit + Sablon).
+//   Donut  : rincian Total Pengeluaran tanpa hitung dobel (lihat backend
+//            api_getDashboardStats). Kasbon TIDAK masuk (potongan gaji).
+const chartState = { stats: null, sig: '', error: false, obs: null };
+const CHART_OWNER_FILTERS = [{ code: 'ALL', name: 'Semua' }, { code: 'PINGBRO', name: 'PINGBRO' }, { code: 'SUNRISE', name: 'SUNRISE' }, { code: 'BROTHERHOOD', name: 'BROTHERHOOD' }];
+const DONUT_SLICES = [
+  { key: 'gajiJahit', label: 'Gaji Jahit', cls: 'dc--jahit' },
+  { key: 'gajiSablon', label: 'Gaji Sablon', cls: 'dc--sablon' },
+  { key: 'gajiHarian', label: 'Gaji Harian', cls: 'dc--harian' },
+  { key: 'gajiMinggu', label: 'Gaji Minggu', cls: 'dc--minggu' },
+  { key: 'lembur', label: 'Lembur', cls: 'dc--lembur' },
+  { key: 'lain', label: 'Pengeluaran PINGBRO', cls: 'dc--pingbro', owner: 'PINGBRO' },
+  { key: 'lain', label: 'Pengeluaran SUNRISE', cls: 'dc--sunrise', owner: 'SUNRISE' }
+];
+
+function chartsSkeleton() {
+  return '<div class="dash-charts"><div class="card dash-chart-skel"></div><div class="card dash-chart-skel"></div></div>';
+}
+
+function trendOwnerValue(m, code, key) {
+  const by = m.byOwner || {};
+  if (code === 'ALL') return Object.values(by).reduce((s, o) => s + (Number(o[key]) || 0), 0);
+  return by[code] ? Number(by[code][key]) || 0 : 0;
+}
+
+function pctText(p) { return `${p.toFixed(1).replace('.', ',')}%`; }
+
+function renderCharts() {
+  const root = document.getElementById('dash-charts');
+  if (!root) return;
+  if (!chartState.stats) {
+    if (chartState.error) {
+      root.innerHTML = `<div class="notice notice-info">${icon('info')} Statistik grafik belum tersedia. Pastikan backend (Kode.gs) sudah diperbarui ke versi terbaru, lalu muat ulang halaman.</div>`;
+    }
+    return;
+  }
+  const code = getOwnerFilter();
+  const stats = chartState.stats;
+  const months = stats.trend || [];
+  const periodLabel = formatPeriodLabel(getCurrentPeriod());
+  const ownerName = code === 'ALL' ? 'Semua' : code;
+
+  // --- Tren ---
+  const series = {
+    jahit: months.map((m) => trendOwnerValue(m, code, 'jahit')),
+    sablon: months.map((m) => trendOwnerValue(m, code, 'sablon'))
+  };
+  series.total = series.jahit.map((v, i) => v + series.sablon[i]);
+  const last = months.length - 1;
+  const cur = series.total[last] || 0, prev = last > 0 ? series.total[last - 1] || 0 : 0;
+  let chip = '';
+  if (prev > 0) {
+    const p = ((cur - prev) / prev) * 100;
+    chip = `<span class="kh-chip kh-chip--${p >= 0 ? 'up' : 'down'}">${p >= 0 ? '↑' : '↓'} ${pctText(Math.abs(p))} dari bulan lalu</span>`;
+  }
+  const trendAll0 = series.total.every((v) => !v);
+  const filterBtns = CHART_OWNER_FILTERS.map((f) => `<button type="button" class="seg__btn${f.code === code ? ' is-active' : ''}" data-owner="${f.code}" aria-pressed="${f.code === code}">${f.name}</button>`).join('');
+  const lastLabel = months[last] ? months[last].label : '';
+  const trendCard = `
+    <section class="card chart-card chart-card--trend" aria-label="Tren Omzet 6 Bulan Terakhir">
+      <div class="chart-card__head">
+        <div class="chart-card__title"><span class="chart-card__icon">${icon('trendUp', 18)}</span><div><h3>Tren Omzet 6 Bulan Terakhir</h3><div class="chart-card__sub">${months.length ? escapeHtml(months[0].label) + ' – ' + escapeHtml(lastLabel) : ''} · Owner: ${escapeHtml(ownerName)}</div></div></div>
+        <div class="seg" role="group" aria-label="Filter Owner">${filterBtns}</div>
+      </div>
+      <div class="trend-summary"><div><div class="ts-label">Total Omzet ${escapeHtml(lastLabel)}</div><div class="ts-value">${formatCurrency(cur)}</div></div>${chip}</div>
+      <div class="chart-legend">
+        <span class="lg"><i class="lg__line tc--jahit"></i>Omzet Jahit</span>
+        <span class="lg"><i class="lg__line tc--sablon"></i>Omzet Sablon</span>
+        <span class="lg"><i class="lg__line tc--total"></i>Total Omzet</span>
+      </div>
+      <div class="trend-chart">
+        <div class="tc-canvas"></div>
+        <div class="tc-tip" hidden></div>
+        ${trendAll0 ? `<div class="chart-empty">Belum ada omzet ${code === 'ALL' ? '' : 'untuk ' + escapeHtml(code) + ' '}pada 6 bulan terakhir.</div>` : ''}
+      </div>
+      <div class="chart-sr"><table><caption>Tren Omzet 6 bulan terakhir, Owner ${escapeHtml(ownerName)}</caption><thead><tr><th>Bulan</th><th>Omzet Jahit</th><th>Omzet Sablon</th><th>Total Omzet</th></tr></thead><tbody>${months.map((m, i) => `<tr><td>${escapeHtml(m.label)}</td><td>${formatCurrency(series.jahit[i])}</td><td>${formatCurrency(series.sablon[i])}</td><td>${formatCurrency(series.total[i])}</td></tr>`).join('')}</tbody></table></div>
+    </section>`;
+
+  // --- Donut ---
+  const comp = stats.composition || { byOwner: {} };
+  const ownersIn = code === 'ALL' ? ['PINGBRO', 'SUNRISE'] : [code];
+  const slices = DONUT_SLICES.filter((s) => !s.owner || ownersIn.includes(s.owner)).map((s) => {
+    const by = comp.byOwner || {};
+    const value = s.owner
+      ? (by[s.owner] ? Number(by[s.owner].lain) || 0 : 0)
+      : ownersIn.reduce((sum, c) => sum + (by[c] ? Number(by[c][s.key]) || 0 : 0), 0);
+    return { ...s, value };
+  });
+  const totalSlices = slices.reduce((s, x) => s + x.value, 0);
+  slices.forEach((s) => { s.pct = totalSlices > 0 ? (s.value / totalSlices) * 100 : 0; s.title = `${s.label}: ${formatCurrency(s.value)} (${pctText(s.pct)})`; });
+  const totalLabel = code === 'ALL' ? 'Total Pengeluaran' : `Total Pengeluaran ${code}`;
+  const donutSvg = donutChart(slices, { centerLabel: 'Total', centerValue: formatCurrency(totalSlices) });
+  const legend = slices.map((s, i) => `
+    <li class="dc-row${s.value > 0 ? '' : ' is-zero'}" data-i="${i}">
+      <i class="dc-dot ${s.cls}"></i><span class="dc-name">${escapeHtml(s.label)}</span>
+      <span class="dc-val">${formatCurrency(s.value)}</span><span class="dc-pct">${pctText(s.pct)}</span>
+    </li>`).join('');
+  const emptyMsg = code === 'ALL' ? 'Belum ada pengeluaran pada periode ini.' : `${escapeHtml(code)} tidak memiliki Pengeluaran pada periode ini.`;
+  const donutCard = `
+    <section class="card chart-card chart-card--donut" aria-label="Komposisi Pengeluaran">
+      <div class="chart-card__head">
+        <div class="chart-card__title"><span class="chart-card__icon chart-card__icon--red">${icon('receipt', 18)}</span><div><h3>Komposisi Pengeluaran</h3><div class="chart-card__sub">${escapeHtml(periodLabel)} · Owner: ${escapeHtml(ownerName)}</div></div></div>
+      </div>
+      <div class="donut-body">
+        <div class="donut-figure">${donutSvg}</div>
+        ${totalSlices > 0 ? `<ul class="dc-legend">${legend}</ul>` : `<div class="chart-empty chart-empty--inline">${emptyMsg}</div>`}
+      </div>
+      <div class="donut-total"><span>${escapeHtml(totalLabel)}</span><strong>${formatCurrency(totalSlices)}</strong></div>
+      <p class="chart-note">Gaji = gaji bersih yang sudah dicatat sebagai Pengeluaran (Slip Gaji › Dibayarkan Oleh), jadi tidak dihitung dua kali. Pengeluaran PINGBRO/SUNRISE = di luar gaji. Kasbon tidak dihitung (potongan gaji, bukan biaya usaha).</p>
+    </section>`;
+
+  root.innerHTML = `<div class="dash-charts">${trendCard}${donutCard}</div>`;
+
+  root.querySelectorAll('.seg__btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      if (btn.dataset.owner === getOwnerFilter()) return;
+      setOwnerFilter(btn.dataset.owner);   // sama dengan pill Owner di topbar (ikut tersinkron)
+      renderCharts();
+    });
+  });
+  const svgDonut = root.querySelector('.dn-svg');
+  root.querySelectorAll('.dc-row').forEach((row) => {
+    const i = row.dataset.i;
+    const seg = () => svgDonut && svgDonut.querySelector(`.dn-seg[data-i="${i}"]`);
+    row.addEventListener('mouseenter', () => { if (svgDonut) { svgDonut.classList.add('has-hover'); const s = seg(); if (s) s.classList.add('is-hover'); } });
+    row.addEventListener('mouseleave', () => { if (svgDonut) { svgDonut.classList.remove('has-hover'); const s = seg(); if (s) s.classList.remove('is-hover'); } });
+  });
+
+  mountTrendChart(root, months, series);
+}
+
+function mountTrendChart(root, months, series) {
+  const box = root.querySelector('.trend-chart');
+  const canvas = root.querySelector('.tc-canvas');
+  const tip = root.querySelector('.tc-tip');
+  if (!box || !canvas || !months.length) return;
+  if (chartState.obs) { try { chartState.obs.disconnect(); } catch (e) { /* ignore */ } chartState.obs = null; }
+  const points = months.map((m) => ({ label: shortMonthLabel(m.year, m.month) }));
+  let drawnW = 0, drawnH = 0;
+
+  const draw = () => {
+    const w = Math.floor(box.clientWidth);
+    const h = Math.max(220, Math.floor(box.clientHeight));
+    if (!w || (Math.abs(w - drawnW) < 2 && Math.abs(h - drawnH) < 2)) return;
+    drawnW = w; drawnH = h;
+    const ch = multiLineChart(points, [
+      { key: 'sablon', values: series.sablon, cls: 'tc--sablon' },
+      { key: 'jahit', values: series.jahit, cls: 'tc--jahit' },
+      { key: 'total', values: series.total, cls: 'tc--total', area: true }
+    ], { width: w, height: h });
+    canvas.innerHTML = ch.svg;
+    const svg = canvas.querySelector('svg');
+    const guide = svg.querySelector('.tc-guide');
+    const hide = () => { guide.style.display = 'none'; tip.hidden = true; svg.querySelectorAll('.tc-dot.is-active').forEach((d) => d.classList.remove('is-active')); };
+    const show = (clientX) => {
+      const rect = svg.getBoundingClientRect();
+      const x = clientX - rect.left;
+      let best = 0;
+      ch.xs.forEach((xx, i) => { if (Math.abs(xx - x) < Math.abs(ch.xs[best] - x)) best = i; });
+      guide.setAttribute('x1', ch.xs[best]); guide.setAttribute('x2', ch.xs[best]); guide.style.display = '';
+      svg.querySelectorAll('.tc-dot').forEach((d) => d.classList.toggle('is-active', Number(d.dataset.i) === best));
+      tip.innerHTML = `<div class="tc-tip__title">${escapeHtml(months[best].label)}</div>
+        <div class="tc-tip__row"><i class="lg__line tc--jahit"></i><span>Omzet Jahit</span><b>${formatCurrency(series.jahit[best])}</b></div>
+        <div class="tc-tip__row"><i class="lg__line tc--sablon"></i><span>Omzet Sablon</span><b>${formatCurrency(series.sablon[best])}</b></div>
+        <div class="tc-tip__row"><i class="lg__line tc--total"></i><span>Total Omzet</span><b>${formatCurrency(series.total[best])}</b></div>`;
+      tip.hidden = false;
+      const tw = tip.offsetWidth;
+      let left = ch.xs[best] + 14;
+      if (left + tw > box.clientWidth) left = ch.xs[best] - tw - 14;
+      tip.style.left = `${Math.max(0, left)}px`;
+    };
+    svg.addEventListener('pointermove', (e) => show(e.clientX));
+    svg.addEventListener('pointerdown', (e) => show(e.clientX));
+    svg.addEventListener('pointerleave', (e) => { if (e.pointerType === 'mouse') hide(); });
+  };
+
+  draw();
+  if (typeof ResizeObserver === 'function') {
+    chartState.obs = new ResizeObserver(() => {
+      if (!box.isConnected) { chartState.obs.disconnect(); return; }
+      draw();
+    });
+    chartState.obs.observe(box);
+  }
 }
 
 // ---- Owner panels (PINGBRO / SUNRISE) ---------------------------------
@@ -432,14 +639,19 @@ function ownerPanelHtml(o, closed, periodLabel) {
       </div>
 
       <div class="op-total op-total--${mode.toLowerCase()} owner-panel__stat--total">
-        <div class="op-total__icon">${icon('coins', 22)}</div>
-        <div class="op-total__main">
-          <div class="op-total__label label">Total Harus Dibayar ${escapeHtml(name)}</div>
-          <div class="op-total__value value" style="color:${valueColor}">${formatCurrency(total)}</div>
-          <div class="op-total__caption">${caption}</div>
-          <div class="op-progress" role="progressbar" aria-label="Penyelesaian Total Harus Dibayar ${escapeHtml(name)}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(settledPct)}"><span style="width:${settledPct.toFixed(0)}%"></span></div>
-          <div class="op-total__chips owner-panel__breakdown"><span>Sisa periode lalu: ${formatCurrency(sisaLalu)}</span><span>${gross >= 0 || diterima === 0 ? 'Sudah dibayar' : 'Sudah diterima'}: ${formatCurrency(gross >= 0 ? dibayar : diterima)}</span></div>
+        <div class="op-total__top">
+          <div class="op-total__icon">${icon('coins', 22)}</div>
+          <div class="op-total__main">
+            <div class="op-total__label label" title="Total Harus Dibayar ${escapeHtml(name)}">Total Harus Dibayar ${escapeHtml(name)}</div>
+            <div class="op-total__value value" style="color:${valueColor}">${formatCurrency(total)}</div>
+            <div class="op-total__caption" title="${escapeHtml(caption)}">${caption}</div>
+          </div>
         </div>
+        <div class="op-progress" role="progressbar" aria-label="Penyelesaian Total Harus Dibayar ${escapeHtml(name)}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(settledPct)}"><span style="width:${settledPct.toFixed(0)}%"></span></div>
+        <dl class="op-total__chips owner-panel__breakdown">
+          <div><dt>Sisa periode lalu</dt><dd>${formatCurrency(sisaLalu)}</dd></div>
+          <div><dt>${gross >= 0 || diterima === 0 ? 'Sudah dibayar' : 'Sudah diterima'}</dt><dd>${formatCurrency(gross >= 0 ? dibayar : diterima)}</dd></div>
+        </dl>
         <div class="owner-panel__actions">
           ${actionBtn}
           <button type="button" class="btn btn-secondary owner-panel__cta" data-owner-code="${escapeHtml(code)}">${icon('chart', 15)} Lihat Detail ${escapeHtml(name)}</button>
