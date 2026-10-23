@@ -1049,3 +1049,6 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
   .rk-eq__op { width: 100%; line-height: 1; }
   .rk-eq__value { font-size: 17px; }
 }
+
+/* ID Transaksi (Import Excel) */
+.trx-id { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; letter-spacing: .02em; background: var(--color-surface-muted); color: var(--color-text-high); padding: 1px 6px; border-radius: 6px; white-space: nowrap; }

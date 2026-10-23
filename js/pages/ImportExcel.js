@@ -36,7 +36,7 @@
 // confirmImportMulti (all three actions already generic over an arbitrary
 // `categories` map — no backend action was added for Pengeluaran).
 // ============================================================================
-import { fetchData, postData } from '../api.js';
+import { fetchData, postData, newRequestId } from '../api.js';
 import { fetchSWR, invalidate, invalidatePrefix } from '../cache.js';
 import { formatCurrency, escapeHtml, toast, badge, formatPeriodLabel, openModal, closeModal } from '../ui.js';
 import { icon } from '../icons.js';
@@ -456,8 +456,29 @@ const wiz = {
   sheetCounts: null,
   parseWarnings: [],
   preview: null,
-  confirmed: false
+  confirmed: false,
+  confirmKey: '',     // satu kunci per preview: konfirmasi ganda / retry memakai kunci yang sama (anti-dobel)
+  rowFilter: 'all'
 };
+
+// ---- ID Transaksi -----------------------------------------------------------
+// 5 sheet bertransaksi punya kolom "ID Transaksi" (identitas permanen baris). Sheet lain
+// (GAJI HARIAN, KASBON) tidak memakainya.
+const TRX_MODULES = ['jahit', 'sablon', 'gaji_jahit', 'gaji_sablon', 'pengeluaran'];
+const ID_COL = 'ID Transaksi';
+const ID_SHEETS = {
+  jahit: { name: 'JAHIT', header: ['Owner', 'Jenis', 'Order Jahit', 'Jumlah'], keys: ['owner', 'jenis', 'order', 'jumlah'] },
+  sablon: { name: 'SABLON', header: ['Owner', 'Jenis', 'Design Sablon', 'Warna', 'Jumlah'], keys: ['owner', 'jenis', 'design', 'warna', 'jumlah'] },
+  gaji_jahit: { name: 'GAJI JAHIT', header: ['Pekerja', 'Jenis Pekerjaan', 'Nama Order', 'Jumlah'], keys: ['pekerja', 'jenis_pekerjaan', 'order', 'jumlah'] },
+  gaji_sablon: { name: 'GAJI SABLON', header: ['Pekerja', 'Jenis Tinta', 'Nama Desain', 'Warna', 'Jumlah'], keys: ['pekerja', 'jenis_tinta', 'design', 'warna', 'jumlah'] },
+  pengeluaran: { name: 'PENGELUARAN', header: ['Owner', 'Tanggal', 'Jenis Pengeluaran', 'Keterangan', 'Nominal'], keys: ['owner', 'tanggal', 'jenis', 'keterangan', 'nominal'] }
+};
+// Hanya menambahkan trx_id bila sel ID terisi — file lama (tanpa ID) menghasilkan baris mentah yang sama persis seperti dulu.
+function withTrx(obj, row) {
+  const id = String(pickCell(row, ID_COL) ?? '').replace(/\s+/g, '').toUpperCase();
+  if (id) obj.trx_id = id;
+  return obj;
+}
 
 // Set by goToImportExcel() below (called from the Penggajian pages' "Import
 // Excel" button) — no longer preselects a module (the wizard now always
@@ -474,7 +495,7 @@ export async function render(container) {
   const period = getCurrentPeriod();
   wiz.step = 0; wiz.periodId = period ? period.id : '';
   wiz.file = null; wiz.fileHash = ''; wiz.fingerprint = null; wiz.categories = null; wiz.sheetCounts = null; wiz.parseWarnings = [];
-  wiz.preview = null; wiz.confirmed = false;
+  wiz.preview = null; wiz.confirmed = false; wiz.confirmKey = ''; wiz.rowFilter = 'all';
   const cameFromKey = pendingModule && CATEGORY_DEFS[pendingModule] ? pendingModule : null;
   const cameFrom = cameFromKey ? CATEGORY_DEFS[cameFromKey].label : null;
   pendingModule = null;
@@ -482,7 +503,7 @@ export async function render(container) {
   container.innerHTML = `
     <div class="page-header">
       <div><h1>Import Excel</h1><div class="subtitle">Input massal Jahit/Sablon/Penggajian/Kasbon/Pengeluaran lewat SATU file .xlsx &mdash; harga/tarif selalu dihitung server, bukan dari file. Sheet yang kosong dilewati; data yang sudah ada diperbarui otomatis, tidak diduplikat.</div></div>
-      <div class="page-header__actions"><button class="btn btn-secondary" id="dl-template">${icon('download', 15)} Unduh Template Excel</button></div>
+      <div class="page-header__actions"><button class="btn btn-secondary" id="dl-export" title="Unduh transaksi periode ini lengkap dengan kolom ID Transaksi — dasar paling aman untuk mengedit lalu mengimpor ulang">${icon('download', 15)} Unduh Data Periode (dengan ID)</button><button class="btn btn-secondary" id="dl-template">${icon('download', 15)} Unduh Template Excel</button></div>
     </div>
     ${cameFrom ? `<div class="notice notice-info mb-12">${icon('file', 15)} Anda datang dari halaman <strong>${escapeHtml(cameFrom)}</strong> &mdash; isi sheet <strong>${escapeHtml(MODULE_SHEET_HINT[cameFromKey] || cameFrom)}</strong> di template, sheet lain boleh dikosongkan.</div>` : ''}
     <div class="wizard-steps" id="wizard-steps"></div>
@@ -490,6 +511,7 @@ export async function render(container) {
   `;
 
   document.getElementById('dl-template').addEventListener('click', downloadTemplate);
+  document.getElementById('dl-export').addEventListener('click', downloadPeriodData);
   renderSteps();
   renderStepBody();
 }
@@ -533,6 +555,11 @@ function renderStep1(root) {
       Kolom <strong>Owner</strong> pada sheet JAHIT/SABLON/PENGELUARAN kini diisi per baris &mdash; satu file boleh berisi campuran Owner yang berbeda.
       Sheet yang dikosongkan tidak akan diproses, dan data yang sudah ada untuk sheet itu tidak akan terhapus.
     </div>
+    <div class="notice notice-info mb-12"><div>
+      <strong>ID Transaksi.</strong> Setiap transaksi Jahit, Sablon, Gaji Jahit, Gaji Sablon, dan Pengeluaran punya ID permanen (mis. <code>PGL-7F3K9Q2A</code>) pada kolom <strong>ID Transaksi</strong>.
+      ID inilah yang dipakai mengenali transaksi saat file diimpor ulang: ID sama + isi sama = <em>Tidak berubah</em>, ID sama + isi beda = <em>Diperbarui</em>, ID baru/kosong = <em>Baru</em>.
+      Untuk mengedit data yang sudah ada, klik <strong>Unduh Data Periode (dengan ID)</strong> di kanan atas, ubah di file itu, lalu impor kembali. Jangan mengubah atau menyalin kolom ID. File lama tanpa kolom ID tetap bisa diimpor (dicocokkan lewat isi data).
+    </div></div>
     <div class="form-actions">
       <button class="btn btn-primary" id="wiz-next" ${isClosed || !period ? 'disabled' : ''}>Lanjut</button>
     </div>
@@ -598,7 +625,7 @@ async function handleWorkbook(file) {
       XLSX.utils.sheet_to_json(jahitSheet, { defval: '' }).forEach((r) => {
         if (isBlankRow(r)) return;
         n++;
-        categories.jahit.push({ owner: String(r['Owner'] ?? '').trim(), jenis: String(r['Jenis'] ?? '').trim(), order: String(r['Order Jahit'] ?? '').trim(), jumlah: r['Jumlah'] });
+        categories.jahit.push(withTrx({ owner: String(r['Owner'] ?? '').trim(), jenis: String(r['Jenis'] ?? '').trim(), order: String(r['Order Jahit'] ?? '').trim(), jumlah: r['Jumlah'] }, r));
       });
       if (n) sheetCounts['JAHIT'] = n;
     }
@@ -608,7 +635,7 @@ async function handleWorkbook(file) {
       XLSX.utils.sheet_to_json(sablonSheet, { defval: '' }).forEach((r) => {
         if (isBlankRow(r)) return;
         n++;
-        categories.sablon.push({ owner: String(r['Owner'] ?? '').trim(), jenis: String(r['Jenis'] ?? '').trim(), design: String(r['Design Sablon'] ?? '').trim(), warna: r['Warna'], jumlah: r['Jumlah'] });
+        categories.sablon.push(withTrx({ owner: String(r['Owner'] ?? '').trim(), jenis: String(r['Jenis'] ?? '').trim(), design: String(r['Design Sablon'] ?? '').trim(), warna: r['Warna'], jumlah: r['Jumlah'] }, r));
       });
       if (n) sheetCounts['SABLON'] = n;
     }
@@ -618,7 +645,7 @@ async function handleWorkbook(file) {
       XLSX.utils.sheet_to_json(gajiJahitSheet, { defval: '' }).forEach((r) => {
         if (isBlankRow(r)) return;
         n++;
-        categories.gaji_jahit.push({ pekerja: String(r['Pekerja'] ?? '').trim(), jenis_pekerjaan: String(r['Jenis Pekerjaan'] ?? '').trim(), order: String(r['Nama Order'] ?? '').trim(), jumlah: r['Jumlah'] });
+        categories.gaji_jahit.push(withTrx({ pekerja: String(r['Pekerja'] ?? '').trim(), jenis_pekerjaan: String(r['Jenis Pekerjaan'] ?? '').trim(), order: String(r['Nama Order'] ?? '').trim(), jumlah: r['Jumlah'] }, r));
       });
       if (n) sheetCounts['GAJI JAHIT'] = n;
     }
@@ -628,7 +655,7 @@ async function handleWorkbook(file) {
       XLSX.utils.sheet_to_json(gajiSablonSheet, { defval: '' }).forEach((r) => {
         if (isBlankRow(r)) return;
         n++;
-        categories.gaji_sablon.push({ pekerja: String(r['Pekerja'] ?? '').trim(), jenis_tinta: String(r['Jenis Tinta'] ?? '').trim(), design: String(r['Nama Desain'] ?? '').trim(), warna: r['Warna'], jumlah: r['Jumlah'] });
+        categories.gaji_sablon.push(withTrx({ pekerja: String(r['Pekerja'] ?? '').trim(), jenis_tinta: String(r['Jenis Tinta'] ?? '').trim(), design: String(r['Nama Desain'] ?? '').trim(), warna: r['Warna'], jumlah: r['Jumlah'] }, r));
       });
       if (n) sheetCounts['GAJI SABLON'] = n;
     }
@@ -694,11 +721,11 @@ async function handleWorkbook(file) {
       XLSX.utils.sheet_to_json(pengeluaranSheet, { defval: '' }).forEach((r) => {
         if (isBlankRow(r)) return;
         n++;
-        categories.pengeluaran.push({
+        categories.pengeluaran.push(withTrx({
           owner: String(pickCell(r, 'Owner') ?? '').trim(), tanggal: normalizeDateCell(pickCell(r, 'Tanggal')),
           jenis: String(pickCell(r, 'Jenis Pengeluaran') ?? '').trim(), keterangan: String(pickCell(r, 'Keterangan') ?? '').trim(),
           nominal: pickCell(r, 'Nominal')
-        });
+        }, r));
       });
       if (n) sheetCounts['PENGELUARAN'] = n;
     }
@@ -748,13 +775,30 @@ async function renderStep3(root) {
   root.innerHTML = '<div class="notice notice-info">Menghitung pratinjau harga/tarif di server untuk semua kategori...</div>';
 }
 
+// Status baris di Preview. "Konflik" = baris yang ditahan (ID bermasalah / tidak bisa dicocokkan dengan pasti /
+// dobel dalam file) — tidak ditulis sampai diperbaiki, baris lain tetap diproses.
+const STATUS_FILTERS = [
+  { key: 'all', label: 'Semua' }, { key: 'new', label: 'Baru' }, { key: 'update', label: 'Diperbarui' },
+  { key: 'skip', label: 'Tidak berubah' }, { key: 'conflict', label: 'Konflik' }, { key: 'error', label: 'Gagal' }
+];
+const filterKeyOf = (status) => (status === 'duplicate_in_file' ? 'conflict' : status);
+
 function statusBadge(r) {
-  if (r.status === 'error') return badge(r.error || 'Error', 'critical');
+  if (r.status === 'error') return badge(r.error || 'Gagal', 'critical');
   if (r.status === 'new') return badge('Baru', 'success');
   if (r.status === 'update') return badge('Diperbarui', 'warning');
-  if (r.status === 'skip') return badge('Dilewati (sama)', 'neutral');
-  if (r.status === 'duplicate_in_file') return badge('Duplikat dalam file', 'critical');
+  if (r.status === 'skip') return badge('Tidak berubah', 'neutral');
+  if (r.status === 'conflict') return badge('Konflik', 'critical');
+  if (r.status === 'duplicate_in_file') return badge('Konflik · duplikat dalam file', 'critical');
   return badge(String(r.status), 'neutral');
+}
+
+function idCell(r) {
+  if (r.status === 'error') return r.trxId ? `<code class="trx-id">${escapeHtml(r.trxId)}</code>` : '<span class="text-low">-</span>';
+  if (r.trxId) return `<code class="trx-id">${escapeHtml(r.trxId)}</code>`;
+  if (r.status === 'skip' || r.status === 'update') return '<span class="text-low" title="Data lama belum punya ID — diberi ID otomatis saat Confirm">ID diberikan saat simpan</span>';
+  if (r.status === 'conflict' || r.status === 'duplicate_in_file') return '<span class="text-low">-</span>';
+  return '<span class="text-low" title="ID dibuat otomatis saat disimpan">dibuat otomatis</span>';
 }
 
 // Requirement #5's exact per-category count summary, e.g.:
@@ -787,24 +831,29 @@ function renderSheetCountSummary(sheetCounts) {
 
 function renderCategoryPreviewTable(module, cat) {
   const def = CATEGORY_DEFS[module];
-  const rows = cat.validRows.map((r) => ({ row: r.row, status: r.matchStatus, warning: r.warning, changes: r.changes, ...def.mapValid(r) }))
-    .concat(cat.errors.map((e) => ({ row: e.row, status: 'error', error: e.error })))
+  const hasTrx = TRX_MODULES.includes(module);
+  const rows = cat.validRows.map((r) => ({ row: r.row, status: r.matchStatus, warning: r.warning, changes: r.changes, conflictCode: r.conflictCode, trxRaw: r.trxRaw, trxId: r.trxId || r.forcedTrxId || r.trxRaw || '', ...def.mapValid(r) }))
+    .concat(cat.errors.map((e) => ({ row: e.row, status: 'error', error: e.error, trxId: e.trx_id || '' })))
     .sort((a, b) => a.row - b.row);
+  const sm = cat.summary;
+  const conflictN = (sm.conflictCount || 0) + (sm.duplicateInFileCount || 0);
+  const CLEARABLE = ['format', 'sheet', 'dobel', 'periode'];
   return `
-    <div class="card mb-16">
+    <div class="card mb-16" data-cat-card="${module}">
       <h3 class="mb-8">${escapeHtml(def.label)}
         <span class="text-low" style="font-weight:400;font-size:.85em">
-          (Baru ${cat.summary.newCount} &middot; Diperbarui ${cat.summary.updateCount} &middot; Dilewati ${cat.summary.skipCount}${cat.summary.duplicateInFileCount ? ` &middot; Duplikat dalam file ${cat.summary.duplicateInFileCount}` : ''} &middot; Gagal ${cat.summary.errorCount})
+          (Baru ${sm.newCount} &middot; Diperbarui ${sm.updateCount} &middot; Tidak berubah ${sm.skipCount}${conflictN ? ` &middot; Konflik ${conflictN}` : ''} &middot; Gagal ${sm.errorCount})
         </span>
       </h3>
       <div class="table-wrap"><table class="data-table">
         <thead><tr>
           <th>#</th>
           ${def.previewCols.map((c) => `<th class="${c.align === 'num' ? 'num' : ''}">${escapeHtml(c.label)}</th>`).join('')}
+          ${hasTrx ? '<th>ID Transaksi</th>' : ''}
           <th>Status</th>
         </tr></thead>
         <tbody>${rows.map((r) => `
-          <tr>
+          <tr data-st="${filterKeyOf(r.status)}">
             <td>${r.row}</td>
             ${def.previewCols.map((c) => {
               if (r.status === 'error') return `<td class="${c.align === 'num' ? 'num' : ''}">-</td>`;
@@ -812,7 +861,8 @@ function renderCategoryPreviewTable(module, cat) {
               const text = c.money ? formatCurrency(v) : escapeHtml(v ?? '-');
               return `<td class="${c.align === 'num' ? 'num' : ''}">${text}</td>`;
             }).join('')}
-            <td>${statusBadge(r)}${r.status === 'update' && r.changes && r.changes.length ? `<div class="hint">${escapeHtml(r.changes.join('; '))}</div>` : ''}${r.warning ? `<div class="hint" style="color:var(--status-warning-fg)">${escapeHtml(r.warning)}</div>` : ''}${r.status === 'error' && CATEGORY_EDIT_FIELDS[module] ? `<div class="mt-4"><button type="button" class="btn btn-outline btn-sm" data-edit-row="${module}::${r.row}">${icon('edit', 13)} Edit</button></div>` : ''}</td>
+            ${hasTrx ? `<td>${idCell(r)}</td>` : ''}
+            <td>${statusBadge(r)}${r.status === 'update' && r.changes && r.changes.length ? `<div class="hint">${escapeHtml(r.changes.join('; '))}</div>` : ''}${r.warning ? `<div class="hint" style="color:var(--status-${r.status === 'conflict' || r.status === 'duplicate_in_file' ? 'critical' : 'warning'}-fg)">${escapeHtml(r.warning)}</div>` : ''}${r.status === 'error' && CATEGORY_EDIT_FIELDS[module] ? `<div class="mt-4"><button type="button" class="btn btn-outline btn-sm" data-edit-row="${module}::${r.row}">${icon('edit', 13)} Edit</button></div>` : ''}${r.status === 'conflict' && r.trxRaw && CLEARABLE.includes(r.conflictCode) ? `<div class="mt-4"><button type="button" class="btn btn-outline btn-sm" data-clear-id="${module}::${r.row}" title="Kosongkan kolom ID baris ini sehingga diperlakukan sebagai transaksi baru">Kosongkan ID (jadikan transaksi baru)</button></div>` : ''}</td>
           </tr>`).join('')}
         </tbody>
       </table></div>
@@ -820,9 +870,22 @@ function renderCategoryPreviewTable(module, cat) {
   `;
 }
 
+// Filter status (Semua / Baru / Diperbarui / Tidak berubah / Konflik / Gagal): hanya menyembunyikan baris di
+// layar — tidak memanggil server dan tidak mengubah apa yang akan diimport.
+function applyRowFilter(root) {
+  const f = wiz.rowFilter || 'all';
+  root.querySelectorAll('[data-filter]').forEach((b) => b.classList.toggle('is-active', b.dataset.filter === f));
+  root.querySelectorAll('tr[data-st]').forEach((tr) => { tr.hidden = !(f === 'all' || tr.dataset.st === f); });
+  root.querySelectorAll('[data-cat-card]').forEach((card) => {
+    card.hidden = f !== 'all' && !card.querySelector('tr[data-st]:not([hidden])');
+  });
+}
+
 async function runPreview() {
   const root = document.getElementById('wizard-body');
   const period = getCurrentPeriod();
+  wiz.confirmKey = newRequestId(); // kunci konfirmasi baru untuk setiap preview
+  wiz.rowFilter = 'all';
   const res = await postData('importExcelMulti', {
     period_id: period.id, categories: wiz.categories, file_hash: wiz.fileHash, content_hash: wiz.contentHash
   });
@@ -835,32 +898,43 @@ async function runPreview() {
   wiz.preview = res.data;
   const totals = wiz.preview.totals || {};
   const moduleKeys = Object.keys(wiz.preview.categories);
+  const conflictN = (totals.conflictCount || 0) + (totals.duplicateInFileCount || 0);
   const canImport = (totals.newCount || 0) + (totals.updateCount || 0) + (totals.skipCount || 0) > 0;
+  const trxMods = moduleKeys.filter((m) => TRX_MODULES.includes(m));
+  const anyId = trxMods.some((m) => wiz.preview.categories[m].summary.hasId);
+  const counts = { all: (totals.newCount || 0) + (totals.updateCount || 0) + (totals.skipCount || 0) + conflictN + (totals.errorCount || 0), new: totals.newCount || 0, update: totals.updateCount || 0, skip: totals.skipCount || 0, conflict: conflictN, error: totals.errorCount || 0 };
 
   root.innerHTML = `
     ${renderSheetCountSummary(wiz.sheetCounts || {})}
     <div class="stat-strip mb-16">
-      <div class="stat-strip__item"><div class="label">Data Baru</div><div class="value" style="color:var(--status-success-fg)">${totals.newCount || 0}</div></div>
-      <div class="stat-strip__item"><div class="label">Data Diperbarui</div><div class="value" style="color:var(--status-warning-fg)">${totals.updateCount || 0}</div></div>
-      <div class="stat-strip__item"><div class="label">Data Dilewati</div><div class="value text-low">${totals.skipCount || 0}</div></div>
-      <div class="stat-strip__item"><div class="label">Gagal</div><div class="value" style="color:var(--status-critical-fg)">${totals.errorCount || 0}</div></div>
+      <div class="stat-strip__item"><div class="label">Data Baru</div><div class="value" style="color:var(--status-success-fg)">${counts.new}</div></div>
+      <div class="stat-strip__item"><div class="label">Data Diperbarui</div><div class="value" style="color:var(--status-warning-fg)">${counts.update}</div></div>
+      <div class="stat-strip__item"><div class="label">Tidak Berubah</div><div class="value text-low">${counts.skip}</div></div>
+      <div class="stat-strip__item"><div class="label">Konflik</div><div class="value" style="color:var(--status-critical-fg)">${counts.conflict}</div></div>
+      <div class="stat-strip__item"><div class="label">Gagal</div><div class="value" style="color:var(--status-critical-fg)">${counts.error}</div></div>
     </div>
-    ${(totals.newCount || 0) + (totals.updateCount || 0) + (totals.errorCount || 0) + (totals.duplicateInFileCount || 0) === 0 && (totals.skipCount || 0) > 0 ? `<div class="notice notice-info mb-16">${icon('check', 15)}
-      <strong>Tidak ada perubahan.</strong> Semua ${totals.skipCount} data di file ini sama persis dengan data yang sudah tersimpan, jadi tidak ada yang ditambah, diperbarui, atau digandakan.
-    </div>` : ''}
+    ${trxMods.length && !anyId ? `<div class="notice notice-info mb-16">${icon('file', 15)}<div>
+      <strong>File ini tidak memuat kolom ID Transaksi</strong> (file lama). Baris dicocokkan lewat isi data (Owner/Jenis/Order + nilai) &mdash; aman untuk mengimpor ulang file yang sama. Untuk mengedit data yang sudah ada dengan pasti (termasuk mengganti Owner atau nama order), klik <strong>Unduh Data Periode (dengan ID)</strong>, ubah di file itu, lalu impor kembali.
+    </div></div>` : ''}
+    ${counts.new + counts.update + counts.error + conflictN === 0 && counts.skip > 0 ? `<div class="notice notice-info mb-16">${icon('check', 15)}<div>
+      <strong>Tidak ada perubahan.</strong> Semua ${counts.skip} data di file ini sama persis dengan data yang sudah tersimpan, jadi tidak ada yang ditambah, diperbarui, atau digandakan.
+    </div></div>` : ''}
+    ${conflictN ? `<div class="notice notice-critical mb-16">${icon('alert', 15)}<div>
+      Ditemukan ${conflictN} baris <strong>Konflik</strong>. Baris ini <strong>tidak akan diimport</strong> sampai diperbaiki (alasan dan caranya tertera pada tiap baris); baris lain tetap diproses seperti biasa. Tidak ada data yang digabung atau dihapus otomatis.
+    </div></div>` : ''}
     ${totals.legacyDuplicateCount ? `<div class="notice notice-warning mb-16">${icon('alert', 15)}
-      Ditemukan ${totals.legacyDuplicateCount} kelompok data lama yang dobel di database (kemungkinan sisa import berulang sebelumnya). Data tersebut TIDAK digabung atau dihapus otomatis &mdash; lihat peringatan pada baris terkait, lalu hapus manual bila memang dobel.
+      Ditemukan ${totals.legacyDuplicateCount} kelompok data lama yang identik di database. Bisa jadi transaksi berulang yang sah, bisa juga sisa import berulang sebelumnya. Data tersebut TIDAK digabung atau dihapus otomatis &mdash; masing-masing diberi ID sendiri; hapus manual hanya bila memang dobel.
     </div>` : ''}
-    ${totals.updateCount ? `<div class="notice notice-warning mb-16">${icon('alert', 15)}
-      Ditemukan ${totals.updateCount} data yang sudah ada.<br>Data tersebut akan diperbarui menggunakan data terbaru dari Excel, bukan diduplikat.
+    ${counts.update ? `<div class="notice notice-warning mb-16">${icon('alert', 15)}
+      Ditemukan ${counts.update} data yang sudah ada.<br>Data tersebut akan diperbarui menggunakan data terbaru dari Excel (ID tetap sama), bukan diduplikat.
     </div>` : ''}
-    ${totals.duplicateInFileCount ? `<div class="notice notice-critical mb-16">${icon('alert', 15)}
-      Ditemukan ${totals.duplicateInFileCount} baris yang identik dengan baris lain pada file Excel yang sama (kemungkinan tersalin dua kali).<br>Baris tersebut TIDAK akan diimport — periksa file Excel Anda bila ini tidak disengaja.
-    </div>` : ''}
+    <div class="seg mb-12" role="group" aria-label="Filter status baris">
+      ${STATUS_FILTERS.map((f) => `<button type="button" class="seg__btn" data-filter="${f.key}">${f.label} (${counts[f.key]})</button>`).join('')}
+    </div>
     ${moduleKeys.map((m) => renderCategoryPreviewTable(m, wiz.preview.categories[m])).join('')}
     <div class="form-actions">
       <button class="btn btn-secondary" id="wiz-back">Batal</button>
-      <button class="btn btn-primary" id="wiz-confirm" ${canImport ? '' : 'disabled'}>Confirm Import</button>
+      <button class="btn btn-primary" id="wiz-confirm" ${canImport ? '' : 'disabled'}>Confirm Import${conflictN ? ` (${conflictN} konflik ditahan)` : ''}</button>
     </div>
   `;
   document.getElementById('wiz-back').addEventListener('click', () => { wiz.step = 1; renderStepBody(); });
@@ -875,6 +949,20 @@ async function runPreview() {
       openEditRowModal(m, Number(rowNumStr));
     });
   });
+  root.querySelectorAll('[data-clear-id]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const [m, rowNumStr] = btn.dataset.clearId.split('::');
+      const raw = wiz.categories[m] && wiz.categories[m][Number(rowNumStr) - 1];
+      if (!raw) return;
+      delete raw.trx_id;
+      toast('ID dikosongkan, memvalidasi ulang...', 'success');
+      wiz.step = 2; renderStepBody(); runPreview();
+    });
+  });
+  root.querySelectorAll('[data-filter]').forEach((btn) => {
+    btn.addEventListener('click', () => { wiz.rowFilter = btn.dataset.filter; applyRowFilter(root); });
+  });
+  applyRowFilter(root);
 }
 
 // ---- Step 4: Confirm --------------------------------------------------------
@@ -885,9 +973,12 @@ async function renderStep4(root) {
 async function runConfirm() {
   const root = document.getElementById('wizard-body');
   const period = getCurrentPeriod();
+  // confirm_key + reqId yang SAMA untuk preview ini: klik ganda / retry otomatis / timeout lalu coba lagi
+  // dijawab server dengan hasil yang sama, tanpa menulis dua kali.
+  if (!wiz.confirmKey) wiz.confirmKey = newRequestId();
   const res = await postData('confirmImportMulti', {
-    period_id: period.id, categories: wiz.categories, file_hash: wiz.fileHash, content_hash: wiz.contentHash
-  });
+    period_id: period.id, categories: wiz.categories, file_hash: wiz.fileHash, content_hash: wiz.contentHash, confirm_key: wiz.confirmKey
+  }, { reqId: wiz.confirmKey });
   if (!res.success) {
     root.innerHTML = `<div class="notice notice-critical">${icon('alert')} ${escapeHtml(res.message || 'Gagal menyimpan import.')}</div>
       <div class="form-actions"><button class="btn btn-secondary" id="wiz-back">Kembali ke Preview</button></div>`;
@@ -944,20 +1035,82 @@ async function runConfirm() {
     return true;
   });
 
+  const conflictCount = s.conflictCount || 0;
+  const hasIdFile = TRX_MODULES.some((m) => (wiz.categories[m] || []).length);
   root.innerHTML = `
-    <div class="notice" style="background:var(--status-success-bg);color:var(--status-success-fg)">${icon('check')} ${((s.newCount || 0) + (s.updateCount || 0)) === 0 && !(s.errorCount || 0) ? 'Tidak ada perubahan &mdash; semua data sudah sama dengan yang tersimpan.' : `Import selesai${data.import_batch_id ? ` &mdash; Batch <code>${escapeHtml(data.import_batch_id)}</code>` : ''}.`}</div>
-    <pre class="mt-12" style="background:var(--surface-2, #f4f4f5);padding:12px 16px;border-radius:8px;font-family:inherit;line-height:1.6">Data baru       : ${s.newCount || 0}
+    <div class="notice" style="background:var(--status-success-bg);color:var(--status-success-fg)">${icon('check')} ${((s.newCount || 0) + (s.updateCount || 0)) === 0 && !(s.errorCount || 0) && !conflictCount ? 'Tidak ada perubahan &mdash; semua data sudah sama dengan yang tersimpan.' : `Import selesai${data.import_batch_id ? ` &mdash; Batch <code>${escapeHtml(data.import_batch_id)}</code>` : ''}.`}${data.replayed ? ' (hasil permintaan yang sama sebelumnya &mdash; tidak ditulis ulang)' : ''}</div>
+    <pre class="mt-12" style="background:var(--color-surface-muted);color:var(--color-text-high);padding:12px 16px;border-radius:8px;font-family:inherit;line-height:1.6">Data baru       : ${s.newCount || 0}
 Data diperbarui : ${s.updateCount || 0}
-Data dilewati   : ${s.skipCount || 0}
+Tidak berubah   : ${s.skipCount || 0}
+Konflik (ditahan): ${conflictCount + (s.duplicateInFileCount || 0)}
 Gagal           : ${s.errorCount || 0}</pre>
     ${(data.warnings && data.warnings.length) ? `<div class="notice notice-warning mt-8">${icon('alert', 15)} ${data.warnings.map((w) => escapeHtml(w.message)).join('<br>')}</div>` : ''}
+    ${(conflictCount + (s.duplicateInFileCount || 0)) ? `<div class="notice notice-critical mt-8">${icon('alert', 15)} <div>${conflictCount + (s.duplicateInFileCount || 0)} baris konflik <strong>tidak diimport</strong> (alasan di atas). Perbaiki di file lalu impor ulang &mdash; baris yang sudah masuk akan dikenali lewat ID dan tidak terduplikasi.</div></div>` : ''}
     ${(data.errors && data.errors.length) ? `<div class="notice notice-critical mt-8">${icon('alert', 15)} ${data.errors.length} baris gagal disimpan &mdash; lihat detail status di langkah Preview sebelumnya. Data lain yang sudah benar tetap tersimpan.</div>` : ''}
     <div class="form-actions">
       ${links.map((def) => `<a class="btn btn-primary" href="${def.resultLink}">${escapeHtml(def.resultLabel)}</a>`).join('')}
+      ${hasIdFile ? `<button class="btn btn-secondary" id="wiz-dl-result" title="File Anda lengkap dengan kolom ID Transaksi yang baru terbentuk — pakai file ini untuk impor berikutnya">${icon('download', 15)} Unduh file hasil import (dengan ID)</button>` : ''}
       <button class="btn btn-secondary" id="wiz-new">Import File Lain</button>
     </div>
+    ${hasIdFile ? '<div class="hint mt-8">File hasil import hanya memuat sheet bertransaksi (JAHIT, SABLON, GAJI JAHIT, GAJI SABLON, PENGELUARAN); GAJI HARIAN dan KASBON tidak memakai ID.</div>' : ''}
   `;
+  const dlRes = document.getElementById('wiz-dl-result');
+  if (dlRes) dlRes.addEventListener('click', () => downloadResultFile(data));
   document.getElementById('wiz-new').addEventListener('click', () => render(document.getElementById('view')));
+}
+
+// ---- Unduh data ber-ID --------------------------------------------------------
+function writeIdWorkbook(XLSX, sheets, filename) {
+  const wb = XLSX.utils.book_new();
+  sheets.forEach((sh) => {
+    const ws = XLSX.utils.aoa_to_sheet([sh.header].concat(sh.rows));
+    ws['!cols'] = sh.header.map((h) => ({ wch: h === ID_COL ? 16 : Math.max(10, Math.min(36, String(h).length + 6)) }));
+    XLSX.utils.book_append_sheet(wb, ws, sh.name);
+  });
+  XLSX.writeFile(wb, filename);
+}
+
+// "Unduh Data Periode (dengan ID)": isi database periode terpilih dalam tata letak template + kolom ID Transaksi.
+// Baris lama yang belum punya ID diberi ID sekali (hanya mengisi kolom ID; data lain tidak diubah).
+async function downloadPeriodData() {
+  const btn = document.getElementById('dl-export');
+  const period = getCurrentPeriod();
+  if (!period) { toast('Pilih periode terlebih dahulu.', 'error'); return; }
+  if (btn) btn.disabled = true;
+  try {
+    const res = await postData('exportTransactionData', { period_id: period.id });
+    if (!res.success) { toast(res.message || 'Gagal mengambil data periode (pastikan backend sudah diperbarui).', 'error'); return; }
+    const XLSX = await loadXlsx();
+    const d = res.data;
+    const label = String(d.period_label || period.id).replace(/[^\w\-]+/g, '-');
+    writeIdWorkbook(XLSX, d.sheets, `Data-${label}-dengan-ID.xlsx`);
+    // Kolom ID baru bisa terbentuk di server -> daftar transaksi di layar perlu dimuat ulang.
+    if (d.idsAssigned) Object.values(CATEGORY_DEFS).forEach((def) => invalidate(def.listAction));
+    toast(d.idsAssigned ? `Data diunduh. ${d.idsAssigned} transaksi lama diberi ID.` : 'Data periode diunduh.', 'success');
+  } catch (err) {
+    toast('Gagal mengunduh: ' + err.message, 'error');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+// Hasil import = file yang baru saja diimpor, ditambah ID setiap baris (baru / lama / diperbarui) — siap dipakai impor berikutnya.
+async function downloadResultFile(data) {
+  try {
+    const XLSX = await loadXlsx();
+    const rowIds = data.rowIds || {};
+    const sheets = TRX_MODULES.filter((m) => (wiz.categories[m] || []).length).map((m) => {
+      const def = ID_SHEETS[m];
+      const idByRow = new Map((rowIds[m] || []).map((x) => [x.row, x.trx_id]));
+      return {
+        name: def.name, header: def.header.concat([ID_COL]),
+        rows: wiz.categories[m].map((raw, i) => def.keys.map((k) => (raw[k] === undefined ? '' : raw[k])).concat([idByRow.get(i + 1) || raw.trx_id || '']))
+      };
+    });
+    writeIdWorkbook(XLSX, sheets, `Hasil-Import-dengan-ID-${new Date().toISOString().slice(0, 10)}.xlsx`);
+  } catch (err) {
+    toast('Gagal membuat file: ' + err.message, 'error');
+  }
 }
 
 // ---- Template download ------------------------------------------------------
@@ -977,23 +1130,23 @@ async function downloadTemplate() {
     const ownerA = sampleOwnerName(lk);
 
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
-      ['Owner', 'Jenis', 'Order Jahit', 'Jumlah'],
-      [ownerA, 'Kaos', 'Order A', 20], [ownerA, 'Longsleeve', 'Order B', 15]
+      ['Owner', 'Jenis', 'Order Jahit', 'Jumlah', ID_COL],
+      [ownerA, 'Kaos', 'Order A', 20, ''], [ownerA, 'Longsleeve', 'Order B', 15, '']
     ]), 'JAHIT');
 
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
-      ['Owner', 'Jenis', 'Design Sablon', 'Warna', 'Jumlah'],
-      [ownerA, 'WATERBASE', 'Logo PINGBRO', 2, 20], [ownerA, 'PLASTISOL', 'Design A', 3, 15]
+      ['Owner', 'Jenis', 'Design Sablon', 'Warna', 'Jumlah', ID_COL],
+      [ownerA, 'WATERBASE', 'Logo PINGBRO', 2, 20, ''], [ownerA, 'PLASTISOL', 'Design A', 3, 15, '']
     ]), 'SABLON');
 
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
-      ['Pekerja', 'Jenis Pekerjaan', 'Nama Order', 'Jumlah'],
-      [pekerja, sampleName(lk, 'sewingJobTypes'), 'Order A', 20]
+      ['Pekerja', 'Jenis Pekerjaan', 'Nama Order', 'Jumlah', ID_COL],
+      [pekerja, sampleName(lk, 'sewingJobTypes'), 'Order A', 20, '']
     ]), 'GAJI JAHIT');
 
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
-      ['Pekerja', 'Jenis Tinta', 'Nama Desain', 'Warna', 'Jumlah'],
-      [pekerja, sampleName(lk, 'inkTypes'), 'Design A', 2, 20]
+      ['Pekerja', 'Jenis Tinta', 'Nama Desain', 'Warna', 'Jumlah', ID_COL],
+      [pekerja, sampleName(lk, 'inkTypes'), 'Design A', 2, 20, '']
     ]), 'GAJI SABLON');
 
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
@@ -1007,8 +1160,8 @@ async function downloadTemplate() {
     ]), 'KASBON');
 
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
-      ['Owner', 'Tanggal', 'Jenis Pengeluaran', 'Keterangan', 'Nominal'],
-      [ownerA, '2026-09-05', 'Listrik', 'Tagihan bulanan', 250000]
+      ['Owner', 'Tanggal', 'Jenis Pengeluaran', 'Keterangan', 'Nominal', ID_COL],
+      [ownerA, '2026-09-05', 'Listrik', 'Tagihan bulanan', 250000, '']
     ]), 'PENGELUARAN');
 
     XLSX.writeFile(wb, 'Template-Import-Brotherhood.xlsx');
