@@ -407,8 +407,41 @@ function normalizeDateCell(v) {
   const s = String(v).trim();
   if (!s) return '';
   if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+  // Teks tanggal gaya Indonesia (hari dulu): "04/09/2026", "4-9-26", "4 September 2026".
+  // new Date("04/09/2026") akan terbaca bulan-dulu (9 April) dan toISOString() menggesernya
+  // ke zona UTC (tanggal bisa mundur sehari) — keduanya membuat Pengeluaran tidak cocok saat impor ulang.
+  const dmy = parseDmyText(s);
+  if (dmy) return dmy;
   const parsed = new Date(s);
-  return isNaN(parsed.getTime()) ? s : parsed.toISOString().slice(0, 10);
+  if (isNaN(parsed.getTime())) return s;
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${parsed.getFullYear()}-${pad(parsed.getMonth() + 1)}-${pad(parsed.getDate())}`;
+}
+
+const MONTHS_ID = { jan: 1, januari: 1, feb: 2, februari: 2, mar: 3, maret: 3, apr: 4, april: 4, mei: 5, may: 5, jun: 6, juni: 6, jul: 7, juli: 7, agu: 8, agt: 8, agus: 8, agustus: 8, aug: 8, sep: 9, sept: 9, september: 9, okt: 10, oktober: 10, oct: 10, nov: 11, november: 11, des: 12, desember: 12, dec: 12 };
+function parseDmyText(s) {
+  let d, m, y, mm = /^(\d{1,2})[/\-.](\d{1,2})[/\-.](\d{2}|\d{4})$/.exec(s);
+  if (mm) { d = +mm[1]; m = +mm[2]; y = +mm[3]; } else {
+    mm = /^(\d{1,2})[\s/\-.]+([A-Za-z]+)\.?[\s/\-.,]+(\d{2}|\d{4})$/.exec(s);
+    if (!mm) return '';
+    d = +mm[1]; m = MONTHS_ID[mm[2].toLowerCase()]; y = +mm[3];
+    if (!m) return '';
+  }
+  if (y < 100) y += 2000;
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== m - 1 || dt.getUTCDate() !== d) return '';
+  return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+}
+
+// Hash ISI file (bukan byte file): sama untuk dua file Excel yang isinya sama walau disimpan ulang /
+// urutan baris berbeda. Dipakai untuk mengenali "file ini sudah pernah diimport".
+async function contentHashOf(categories) {
+  const norm = (v) => (typeof v === 'string' ? v.normalize('NFKC').replace(/[\u00a0\u200b-\u200d\ufeff]/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase() : (v === null || v === undefined ? '' : String(v)));
+  const mods = Object.keys(categories || {}).filter((m) => (categories[m] || []).length).sort();
+  const canon = mods.map((m) => [m, categories[m].map((r) => JSON.stringify(Object.keys(r).sort().map((k) => [k, norm(r[k])]))).sort()]);
+  const bytes = new TextEncoder().encode(JSON.stringify(canon));
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 const STEPS = ['Periode', 'Upload File', 'Preview', 'Konfirmasi'];
@@ -675,6 +708,7 @@ async function handleWorkbook(file) {
     }
 
     wiz.categories = categories;
+    wiz.contentHash = await contentHashOf(categories);
     wiz.sheetCounts = sheetCounts;
     wiz.parseWarnings = warnings;
     const presentCounts = SHEET_LABEL_ORDER.filter((label) => sheetCounts[label]).map((label) => `${label} (${sheetCounts[label]})`);
@@ -682,12 +716,12 @@ async function handleWorkbook(file) {
 
     statusRoot.innerHTML = `<div class="notice notice-info">${icon('file', 15)} ${escapeHtml(file.name)} &mdash; terdeteksi: ${presentCounts.map(escapeHtml).join(', ')}.${warningHtml} Memeriksa apakah file ini pernah diimport...</div>`;
 
-    const fp = await fetchData('checkFileFingerprintMulti', { file_hash: wiz.fileHash }).catch(() => null);
+    const fp = await fetchData('checkFileFingerprintMulti', { file_hash: wiz.fileHash, content_hash: wiz.contentHash }).catch(() => null);
     wiz.fingerprint = fp;
     if (fp && fp.duplicate) {
       statusRoot.innerHTML = `<div class="notice notice-warning">${icon('alert', 15)}
         File ini tampaknya sudah pernah diimport sebelumnya${fp.previousBatch ? ` (batch <code>${escapeHtml(fp.previousBatch.import_batch_id || '')}</code>${fp.previousBatch.imported_at ? ', ' + escapeHtml(fp.previousBatch.imported_at) : ''})` : ''}.
-        Data yang sama akan otomatis diperbarui (bukan diduplikat) pada langkah Preview berikutnya &mdash; lanjutkan jika memang ingin mengimport ulang/mengoreksi.
+        Data yang sama akan dikenali dan dilewati (tidak diduplikat); hanya data yang berubah yang akan diperbarui. Lanjutkan jika memang ingin memeriksa ulang/mengoreksi.
         <div class="form-actions" style="margin-top:8px">
           <button class="btn btn-secondary btn-sm" id="fp-cancel">Batal</button>
           <button class="btn btn-primary btn-sm" id="fp-again">Lanjutkan</button>
@@ -753,7 +787,7 @@ function renderSheetCountSummary(sheetCounts) {
 
 function renderCategoryPreviewTable(module, cat) {
   const def = CATEGORY_DEFS[module];
-  const rows = cat.validRows.map((r) => ({ row: r.row, status: r.matchStatus, warning: r.warning, ...def.mapValid(r) }))
+  const rows = cat.validRows.map((r) => ({ row: r.row, status: r.matchStatus, warning: r.warning, changes: r.changes, ...def.mapValid(r) }))
     .concat(cat.errors.map((e) => ({ row: e.row, status: 'error', error: e.error })))
     .sort((a, b) => a.row - b.row);
   return `
@@ -778,7 +812,7 @@ function renderCategoryPreviewTable(module, cat) {
               const text = c.money ? formatCurrency(v) : escapeHtml(v ?? '-');
               return `<td class="${c.align === 'num' ? 'num' : ''}">${text}</td>`;
             }).join('')}
-            <td>${statusBadge(r)}${r.warning ? `<div class="hint" style="color:var(--status-warning-fg)">${escapeHtml(r.warning)}</div>` : ''}${r.status === 'error' && CATEGORY_EDIT_FIELDS[module] ? `<div class="mt-4"><button type="button" class="btn btn-outline btn-sm" data-edit-row="${module}::${r.row}">${icon('edit', 13)} Edit</button></div>` : ''}</td>
+            <td>${statusBadge(r)}${r.status === 'update' && r.changes && r.changes.length ? `<div class="hint">${escapeHtml(r.changes.join('; '))}</div>` : ''}${r.warning ? `<div class="hint" style="color:var(--status-warning-fg)">${escapeHtml(r.warning)}</div>` : ''}${r.status === 'error' && CATEGORY_EDIT_FIELDS[module] ? `<div class="mt-4"><button type="button" class="btn btn-outline btn-sm" data-edit-row="${module}::${r.row}">${icon('edit', 13)} Edit</button></div>` : ''}</td>
           </tr>`).join('')}
         </tbody>
       </table></div>
@@ -790,7 +824,7 @@ async function runPreview() {
   const root = document.getElementById('wizard-body');
   const period = getCurrentPeriod();
   const res = await postData('importExcelMulti', {
-    period_id: period.id, categories: wiz.categories, file_hash: wiz.fileHash
+    period_id: period.id, categories: wiz.categories, file_hash: wiz.fileHash, content_hash: wiz.contentHash
   });
   if (!res.success) {
     root.innerHTML = `<div class="notice notice-critical">${icon('alert')} ${escapeHtml(res.message || 'Gagal memproses preview.')}</div>
@@ -811,6 +845,12 @@ async function runPreview() {
       <div class="stat-strip__item"><div class="label">Data Dilewati</div><div class="value text-low">${totals.skipCount || 0}</div></div>
       <div class="stat-strip__item"><div class="label">Gagal</div><div class="value" style="color:var(--status-critical-fg)">${totals.errorCount || 0}</div></div>
     </div>
+    ${(totals.newCount || 0) + (totals.updateCount || 0) + (totals.errorCount || 0) + (totals.duplicateInFileCount || 0) === 0 && (totals.skipCount || 0) > 0 ? `<div class="notice notice-info mb-16">${icon('check', 15)}
+      <strong>Tidak ada perubahan.</strong> Semua ${totals.skipCount} data di file ini sama persis dengan data yang sudah tersimpan, jadi tidak ada yang ditambah, diperbarui, atau digandakan.
+    </div>` : ''}
+    ${totals.legacyDuplicateCount ? `<div class="notice notice-warning mb-16">${icon('alert', 15)}
+      Ditemukan ${totals.legacyDuplicateCount} kelompok data lama yang dobel di database (kemungkinan sisa import berulang sebelumnya). Data tersebut TIDAK digabung atau dihapus otomatis &mdash; lihat peringatan pada baris terkait, lalu hapus manual bila memang dobel.
+    </div>` : ''}
     ${totals.updateCount ? `<div class="notice notice-warning mb-16">${icon('alert', 15)}
       Ditemukan ${totals.updateCount} data yang sudah ada.<br>Data tersebut akan diperbarui menggunakan data terbaru dari Excel, bukan diduplikat.
     </div>` : ''}
@@ -846,7 +886,7 @@ async function runConfirm() {
   const root = document.getElementById('wizard-body');
   const period = getCurrentPeriod();
   const res = await postData('confirmImportMulti', {
-    period_id: period.id, categories: wiz.categories, file_hash: wiz.fileHash
+    period_id: period.id, categories: wiz.categories, file_hash: wiz.fileHash, content_hash: wiz.contentHash
   });
   if (!res.success) {
     root.innerHTML = `<div class="notice notice-critical">${icon('alert')} ${escapeHtml(res.message || 'Gagal menyimpan import.')}</div>
@@ -905,7 +945,7 @@ async function runConfirm() {
   });
 
   root.innerHTML = `
-    <div class="notice" style="background:var(--status-success-bg);color:var(--status-success-fg)">${icon('check')} Import selesai${data.import_batch_id ? ` &mdash; Batch <code>${escapeHtml(data.import_batch_id)}</code>` : ''}.</div>
+    <div class="notice" style="background:var(--status-success-bg);color:var(--status-success-fg)">${icon('check')} ${((s.newCount || 0) + (s.updateCount || 0)) === 0 && !(s.errorCount || 0) ? 'Tidak ada perubahan &mdash; semua data sudah sama dengan yang tersimpan.' : `Import selesai${data.import_batch_id ? ` &mdash; Batch <code>${escapeHtml(data.import_batch_id)}</code>` : ''}.`}</div>
     <pre class="mt-12" style="background:var(--surface-2, #f4f4f5);padding:12px 16px;border-radius:8px;font-family:inherit;line-height:1.6">Data baru       : ${s.newCount || 0}
 Data diperbarui : ${s.updateCount || 0}
 Data dilewati   : ${s.skipCount || 0}
