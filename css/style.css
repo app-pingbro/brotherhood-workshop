@@ -409,18 +409,29 @@ table.data-table { width: 100%; border-collapse: collapse; min-width: 640px; }
 .sg-multi { display: grid; grid-template-columns: repeat(var(--sg-n, 1), minmax(0, 1fr)); }
 .sg-multi--2 { --sg-n: 2; }
 .sg-multi--3 { --sg-n: 3; }
+.sg-multi--4 { --sg-n: 4; }
 .sg-multi table + table { border-left: 1px solid var(--sg-ln); }
+/* Tabel Rincian Order: SEMUA kolom (header & isi) rata tengah, lebar kolom tetap
+   (persentase) supaya rapi & konsisten. Angka (No/Jumlah/Harga/Total) tidak
+   dipecah; Nama Order & Jenis membungkus teks panjang (tidak dipotong). */
 .sg-table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: .92em; }
-.sg-table .c-no { width: 8%; } .sg-table .c-jn { width: 17%; } .sg-table .c-qt { width: 10%; } .sg-table .c-hg { width: 16%; } .sg-table .c-tt { width: 18%; }
-.sg-table th { text-align: left; font-size: .68em; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: var(--sg-mu); padding: .6em .7em; border-bottom: 1px solid var(--sg-ln); vertical-align: bottom; }
-.sg-table td { padding: .42em .7em; border-bottom: 1px solid var(--sg-ln); vertical-align: top; overflow-wrap: anywhere; }
+.sg-table th { text-align: center; font-size: .68em; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: var(--sg-mu); padding: .6em .4em; border-bottom: 1px solid var(--sg-ln); vertical-align: middle; }
+.sg-table td { text-align: center; padding: .42em .5em; border-bottom: 1px solid var(--sg-ln); vertical-align: middle; overflow-wrap: anywhere; }
 .sg-table tbody tr:last-child td { border-bottom: none; }
-.sg-multi--2 .sg-table td { padding: .3em .55em; }
-.sg-multi--3 .sg-table td { padding: .22em .45em; }
-.sg-multi--2 .sg-table th, .sg-multi--3 .sg-table th { padding: .45em .5em; }
-.sg-table .r { text-align: right; }
-.sg-table .b { font-weight: 800; }
+.sg-table td.n { white-space: nowrap; }
 .sg-table .nm { font-weight: 700; }
+.sg-table .b { font-weight: 800; }
+.sg-table .c-no { width: 6%; } .sg-table .c-nm { width: 30%; } .sg-table .c-jn { width: 16%; }
+.sg-table .c-qt { width: 11%; } .sg-table .c-hg { width: 17%; } .sg-table .c-tt { width: 20%; }
+.sg-multi--2 .c-no { width: 6%; } .sg-multi--2 .c-nm { width: 27%; } .sg-multi--2 .c-jn { width: 15%; }
+.sg-multi--2 .c-qt { width: 10%; } .sg-multi--2 .c-hg { width: 18%; } .sg-multi--2 .c-tt { width: 24%; }
+.sg-multi--3 .c-no { width: 6%; } .sg-multi--3 .c-nm { width: 24%; } .sg-multi--3 .c-jn { width: 14%; }
+.sg-multi--3 .c-qt { width: 10%; } .sg-multi--3 .c-hg { width: 19%; } .sg-multi--3 .c-tt { width: 27%; }
+.sg-multi--4 .c-no { width: 6%; } .sg-multi--4 .c-nm { width: 22%; } .sg-multi--4 .c-jn { width: 14%; }
+.sg-multi--4 .c-qt { width: 9%; } .sg-multi--4 .c-hg { width: 20%; } .sg-multi--4 .c-tt { width: 29%; }
+.sg-multi--2 .sg-table td { padding: .3em .45em; }
+.sg-multi--3 .sg-table td, .sg-multi--4 .sg-table td { padding: .22em .3em; }
+.sg-multi--2 .sg-table th, .sg-multi--3 .sg-table th, .sg-multi--4 .sg-table th { padding: .45em .3em; }
 
 .sg-two { display: grid; grid-template-columns: 1fr 1fr; gap: .85em; align-items: stretch; }
 .sg-box { display: flex; flex-direction: column; min-width: 0; }

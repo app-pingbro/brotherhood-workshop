@@ -18,8 +18,8 @@ import { EXPENSE_OWNERS } from '../config.js';
 import { currentTheme } from '../theme.js';
 import { buildSlipModel, slipFileName } from '../slip/model.js';
 import { fitSlip, mountPrintHost, unmountPrintHost, mountPreview, setPreviewTheme } from '../slip/view.js';
-import { getCachedLogo, ensureLogo, logoRef } from '../slip/logo.js';
-import { downloadSlipPng } from '../slip/png.js';
+import { getCachedLogo, logoSources } from '../slip/logo.js';
+import { downloadSlipPng, warmSlipPng } from '../slip/png.js';
 
 let selectedEmployeeId = '';
 
@@ -227,13 +227,7 @@ async function renderSlip(slip, period, employeeId, reqId) {
     pngBtn.disabled = true;
     pngBtn.innerHTML = `${icon('download', 15)} Membuat PNG...`;
     try {
-      const sources = [];
-      const ensured = await ensureLogo();
-      if (ensured) sources.push(ensured);
-      const ref = logoRef();
-      if (ref && ref.fileId) sources.push(`https://lh3.googleusercontent.com/d/${ref.fileId}=w512`);
-      const stored = getCompanyLogoUrl();
-      if (stored) sources.push(stored);
+      const sources = await logoSources();
       await downloadSlipPng(model, { theme: currentTheme(), logoSources: sources });
       toast('Slip Gaji PNG berhasil diunduh.', 'success');
     } catch (e) {
@@ -243,6 +237,12 @@ async function renderSlip(slip, period, employeeId, reqId) {
       pngBtn.innerHTML = label;
     }
   });
+
+  // Siapkan aset PNG (font, ikon, logo) di latar belakang supaya klik langsung jadi.
+  setTimeout(() => {
+    if (seq !== paintSeq) return;
+    logoSources().then((src) => warmSlipPng({ theme: currentTheme(), logoSources: src })).catch(() => {});
+  }, 150);
 
   // ---- Simpan pembayar (tidak berubah)
   document.getElementById('slip-payer-save')?.addEventListener('click', async () => {

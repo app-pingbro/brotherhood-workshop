@@ -6,7 +6,7 @@
 // localStorage per fileId+updatedAt, jadi hanya diunduh sekali per logo.
 // Semua kegagalan diam-diam: slip tetap jadi dengan inisial perusahaan.
 // ============================================================================
-import { getLookups } from '../state.js';
+import { getLookups, getCompanyLogoUrl } from '../state.js';
 import { fetchData } from '../api.js';
 
 const KEY = 'bw_slip_logo_v1';
@@ -54,21 +54,49 @@ function downscale(dataUrl) {
   });
 }
 
-/** Data URL logo siap-canvas, atau '' bila tidak tersedia. */
-export async function ensureLogo() {
+let inflight = null;
+let failedUntil = 0;
+
+/** Data URL logo siap-canvas, atau '' bila tidak tersedia. Permintaan ganda
+ * berbagi satu request; kegagalan diingat 2 menit (tidak menunggu ulang tiap klik). */
+export function ensureLogo() {
   const ref = logoRef();
-  if (!ref) return '';
+  if (!ref) return Promise.resolve('');
   const hit = getCachedLogo();
-  if (hit) return hit;
-  try {
-    const d = await fetchData('getLogoData', {}, { silent: true });
-    if (d && d.dataUrl) {
-      const small = await downscale(d.dataUrl);
-      if (small) {
-        try { localStorage.setItem(KEY, JSON.stringify({ id: idOf(ref), dataUrl: small })); } catch (e) { /* kuota */ }
-        return small;
-      }
-    }
-  } catch (e) { /* backend lama / jaringan: pakai cadangan */ }
-  return '';
+  if (hit) return Promise.resolve(hit);
+  if (Date.now() < failedUntil) return Promise.resolve('');
+  if (!inflight) {
+    inflight = (async () => {
+      let result = '';
+      try {
+        const d = await fetchData('getLogoData', {}, { silent: true });
+        if (d && d.dataUrl) {
+          const small = await downscale(d.dataUrl);
+          if (small) {
+            try { localStorage.setItem(KEY, JSON.stringify({ id: idOf(ref), dataUrl: small })); } catch (e) { /* kuota */ }
+            result = small;
+          }
+        }
+      } catch (e) { /* backend lama / jaringan: pakai cadangan */ }
+      if (!result) failedUntil = Date.now() + 120000;
+      return result;
+    })().finally(() => { inflight = null; });
+  }
+  return inflight;
+}
+
+/**
+ * Sumber logo untuk PNG: data URL bila tersedia (instan, tanpa jaringan);
+ * jika tidak, URL gambar jaringan sebagai cadangan. Menunggu getLogoData
+ * paling lama `wait` ms agar klik tidak tertahan oleh server yang lambat.
+ */
+export async function logoSources({ wait = 4000 } = {}) {
+  const ref = logoRef();
+  if (!ref) return [];
+  const ensured = await Promise.race([ensureLogo(), new Promise((r) => setTimeout(() => r(''), wait))]);
+  if (ensured) return [ensured];
+  const out = [`https://lh3.googleusercontent.com/d/${ref.fileId}=w512`];
+  const stored = getCompanyLogoUrl();
+  if (stored) out.push(stored);
+  return out;
 }

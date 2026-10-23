@@ -82,28 +82,78 @@ function measureW(ctx, s, size, weight = 400, fam = FONT_BODY, ls = 0, italic = 
 }
 
 // ---- Gambar (ikon & logo) ----------------------------------------------------
-function loadImage(src, cross = false) {
+// Semua pemuatan di-cache per sesi (ikon per warna, logo per daftar sumber) dan
+// dibatasi waktu, supaya klik "Download PNG" tidak pernah menunggu jaringan
+// yang lambat dan tidak mengulang kerja yang sama.
+function loadImage(src, cross = false, timeoutMs = 0) {
   return new Promise((resolve) => {
     const img = new Image();
+    let done = false;
+    const finish = (v) => { if (!done) { done = true; clearTimeout(timer); resolve(v); } };
+    const timer = timeoutMs ? setTimeout(() => finish(null), timeoutMs) : null;
     if (cross) img.crossOrigin = 'anonymous';
-    img.onload = () => resolve(img.naturalWidth ? img : null);
-    img.onerror = () => resolve(null);
+    img.onload = () => finish(img.naturalWidth ? img : null);
+    img.onerror = () => finish(null);
     img.src = src;
   });
 }
 
+const iconCache = new Map();
 function iconImage(name, color) {
-  const svg = icon(name, 96).replace('<svg ', '<svg xmlns="http://www.w3.org/2000/svg" ').replace(/currentColor/g, color);
-  return loadImage('data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg));
+  const key = `${name}|${color}`;
+  if (!iconCache.has(key)) {
+    const svg = icon(name, 96).replace('<svg ', '<svg xmlns="http://www.w3.org/2000/svg" ').replace(/currentColor/g, color);
+    iconCache.set(key, loadImage('data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg)));
+  }
+  return iconCache.get(key);
 }
 
-async function loadLogo(sources) {
-  for (const s of sources) {
-    if (!s) continue;
-    const img = await loadImage(s, !String(s).startsWith('data:'));
-    if (img) return img;
+const LOGO_NET_TIMEOUT = 2500;
+const logoCache = new Map();
+/**
+ * Data URL (instan) dipakai bila ada; sumber jaringan hanya dicoba bila tidak
+ * ada data URL — semuanya PARALEL dengan batas waktu, bukan berurutan.
+ * Hasil (termasuk "tidak ada") di-cache, jadi klik berikutnya tidak menunggu lagi.
+ */
+function loadLogo(sources) {
+  const list = (sources || []).filter(Boolean);
+  const data = list.find((x) => String(x).startsWith('data:'));
+  const net = list.filter((x) => !String(x).startsWith('data:'));
+  const key = data ? 'd:' + data.length + ':' + data.slice(-40) : 'n:' + net.join('|');
+  if (!logoCache.has(key)) {
+    logoCache.set(key, data
+      ? loadImage(data, false, 1500)
+      : Promise.all(net.map((u) => loadImage(u, true, LOGO_NET_TIMEOUT))).then((r) => r.find(Boolean) || null));
   }
-  return null;
+  return logoCache.get(key);
+}
+
+// ---- Font: hanya muat yang belum siap, dibatasi waktu --------------------------
+const FONT_SPECS = ['800 24px Manrope', '700 13px Inter', '600 13px Inter', '400 13px Inter', '800 13px Inter'];
+let fontsPromise = null;
+function ensureFonts() {
+  if (!fontsPromise) {
+    const fs = document.fonts;
+    if (!fs || !fs.load) fontsPromise = Promise.resolve();
+    else {
+      const need = FONT_SPECS.filter((f) => { try { return !fs.check(f); } catch (e) { return true; } });
+      fontsPromise = need.length
+        ? Promise.race([Promise.all(need.map((f) => fs.load(f).catch(() => {}))), new Promise((r) => setTimeout(r, 1500))])
+        : Promise.resolve();
+    }
+  }
+  return fontsPromise;
+}
+
+/** Siapkan aset (font, ikon, logo) di latar belakang sebelum tombol diklik. */
+export function warmSlipPng({ theme = 'light', logoSources = [] } = {}) {
+  const P = PAL[theme] || PAL.light;
+  return Promise.all([
+    ensureFonts(),
+    ...['shirt', 'droplet', 'wallet', 'minus'].map((n) => iconImage(n, P.gdtx)),
+    iconImage('coins', P.ongd),
+    loadLogo(logoSources)
+  ]).catch(() => {});
 }
 
 // ---- Lukis -------------------------------------------------------------------
@@ -216,15 +266,15 @@ function paint(ctx, m, theme, imgs) {
     txt(ctx, title, x + 38, yy + 22, { size: 11, weight: 800, color: P.tx, ls: 1.3 });
   };
 
-  // ---- Tabel order
-  const COL = { no: 44, jenis: 134, qty: 70, harga: 120, total: 132 };
+  // ---- Tabel order (semua kolom rata tengah)
+  const COL = { no: 44, jenis: 128, qty: 76, harga: 128, total: 132 };
   COL.nama = CW - COL.no - COL.jenis - COL.qty - COL.harga - COL.total;
   // Banyak baris (>40) -> baris dirapatkan supaya PNG tidak terlalu panjang.
   const dense = (m.jahitRows.length + m.sablonRows.length) > 40;
   const LH = dense ? 15 : 17, PADV = dense ? 9 : 16;
   const orderCard = (title, iconKey, rows) => {
     if (!rows.length) return;
-    // ukur baris
+    // ukur baris (teks panjang dibungkus per kolom, tidak dipotong)
     const metrics = rows.map((r) => {
       ctx.font = font(700, 12.5); const nm = wrap(ctx, r.nama, COL.nama - 20);
       ctx.font = font(400, 12); const jn = wrap(ctx, r.jenis, COL.jenis - 16);
@@ -236,27 +286,32 @@ function paint(ctx, m, theme, imgs) {
     ctx.save(); rr(ctx, PAD, y, CW, H, 10); ctx.clip();
     cardHeader(PAD, y, CW, title, iconKey);
     let yy = y + 35;
-    // judul kolom
-    const xs = { no: PAD, nama: PAD + COL.no, jenis: PAD + COL.no + COL.nama, qty: PAD + COL.no + COL.nama + COL.jenis };
-    xs.harga = xs.qty + COL.qty; xs.total = xs.harga + COL.harga;
+    const x0 = { no: PAD, nama: PAD + COL.no };
+    x0.jenis = x0.nama + COL.nama; x0.qty = x0.jenis + COL.jenis; x0.harga = x0.qty + COL.qty; x0.total = x0.harga + COL.harga;
+    const mid = (k) => x0[k] + COL[k] / 2; // titik tengah kolom
     const hy = yy + 18;
-    txt(ctx, 'NO', xs.no + 14, hy, { size: 9, weight: 700, color: P.mu, ls: 1 });
-    txt(ctx, 'NAMA ORDER', xs.nama + 4, hy, { size: 9, weight: 700, color: P.mu, ls: 1 });
-    txt(ctx, 'JENIS', xs.jenis + 8, hy, { size: 9, weight: 700, color: P.mu, ls: 1 });
-    txt(ctx, 'JUMLAH', xs.qty + COL.qty - 10, hy, { size: 9, weight: 700, color: P.mu, ls: 1, align: 'right' });
-    txt(ctx, 'HARGA BORONGAN', xs.harga + COL.harga - 10, hy, { size: 9, weight: 700, color: P.mu, ls: 1, align: 'right' });
-    txt(ctx, 'TOTAL', xs.total + COL.total - 14, hy, { size: 9, weight: 700, color: P.mu, ls: 1, align: 'right' });
+    const H9 = { size: 9, weight: 700, color: P.mu, ls: 1, align: 'center' };
+    txt(ctx, 'NO', mid('no') + 0.5, hy, H9);
+    txt(ctx, 'NAMA ORDER', mid('nama') + 0.5, hy, H9);
+    txt(ctx, 'JENIS', mid('jenis') + 0.5, hy, H9);
+    txt(ctx, 'JUMLAH', mid('qty') + 0.5, hy, H9);
+    txt(ctx, 'HARGA BORONGAN', mid('harga') + 0.5, hy, H9);
+    txt(ctx, 'TOTAL', mid('total') + 0.5, hy, H9);
     yy += 28;
     ctx.fillStyle = P.ln; ctx.fillRect(PAD, yy - 1, CW, 1);
     rows.forEach((r, i) => {
       const mt = metrics[i];
       const by = yy + PADV / 2 + 12.5 - (dense ? 1 : 0); // baseline baris pertama
-      txt(ctx, String(r.no), xs.no + 14, by, { size: 12, weight: 400, color: P.mu });
-      mt.nm.forEach((ln, li) => txt(ctx, ln, xs.nama + 4, by + li * LH, { size: 12.5, weight: 700, color: P.tx }));
-      mt.jn.forEach((ln, li) => txt(ctx, ln, xs.jenis + 8, by + li * LH, { size: 12, weight: 400, color: P.tx }));
-      txt(ctx, qtyId(r.jumlah), xs.qty + COL.qty - 10, by, { size: 12.5, weight: 400, color: P.tx, align: 'right' });
-      txt(ctx, rupiah(r.harga), xs.harga + COL.harga - 10, by, { size: 12.5, weight: 400, color: P.tx, align: 'right' });
-      txt(ctx, rupiah(r.total), xs.total + COL.total - 14, by, { size: 12.5, weight: 800, color: P.tx, align: 'right' });
+      // kolom dengan teks lebih pendek diratakan vertikal di tengah baris
+      const nLines = Math.max(mt.nm.length, mt.jn.length);
+      const vy = (cnt) => by + (nLines - cnt) * LH / 2;
+      const cy = vy(1);
+      txt(ctx, String(r.no), mid('no'), cy, { size: 12, weight: 400, color: P.mu, align: 'center' });
+      mt.nm.forEach((ln, li) => txt(ctx, ln, mid('nama'), vy(mt.nm.length) + li * LH, { size: 12.5, weight: 700, color: P.tx, align: 'center' }));
+      mt.jn.forEach((ln, li) => txt(ctx, ln, mid('jenis'), vy(mt.jn.length) + li * LH, { size: 12, weight: 400, color: P.tx, align: 'center' }));
+      txt(ctx, qtyId(r.jumlah), mid('qty'), cy, { size: 12.5, weight: 400, color: P.tx, align: 'center' });
+      txt(ctx, rupiah(r.harga), mid('harga'), cy, { size: 12.5, weight: 400, color: P.tx, align: 'center' });
+      txt(ctx, rupiah(r.total), mid('total'), cy, { size: 12.5, weight: 800, color: P.tx, align: 'center' });
       yy += mt.h;
       if (i < rows.length - 1) { ctx.fillStyle = P.ln; ctx.fillRect(PAD, yy - 0.5, CW, 1); }
     });
@@ -373,24 +428,18 @@ function paint(ctx, m, theme, imgs) {
  * @returns {Promise<HTMLCanvasElement>}
  */
 export async function renderSlipCanvas(model, { theme = 'light', logoSources = [] } = {}) {
-  try {
-    await Promise.all([
-      document.fonts.load("800 24px Manrope"),
-      document.fonts.load("700 13px Inter"),
-      document.fonts.load("400 13px Inter"),
-      document.fonts.load("italic 800 13px Inter")
-    ]);
-  } catch (e) { /* font cadangan sistem */ }
   const P = PAL[theme] || PAL.light;
-  const [shirt, droplet, wallet, minus, coinsDark, logo] = await Promise.all([
+  // font/ikon/logo sudah di-cache (dan biasanya sudah siap dari warmSlipPng)
+  const [, shirt, droplet, wallet, minus, coinsDark, logo] = await Promise.all([
+    ensureFonts(),
     iconImage('shirt', P.gdtx), iconImage('droplet', P.gdtx), iconImage('wallet', P.gdtx), iconImage('minus', P.gdtx),
     iconImage('coins', P.ongd), loadLogo(logoSources)
   ]);
   const imgs = { shirt, droplet, wallet, minus, coinsDark, logo };
 
-  // lintasan 1: ukur tinggi pada kanvas sementara
+  // lintasan 1: hanya mengukur tinggi -> kanvas mini (tanpa mengisi jutaan piksel)
   const probe = document.createElement('canvas');
-  probe.width = W; probe.height = 6000;
+  probe.width = W; probe.height = 16;
   const H = Math.ceil(paint(probe.getContext('2d'), model, theme, imgs));
 
   const scale = Math.max(1, Math.min(2, Math.sqrt(MAX_AREA / (W * H)), MAX_SIDE / H));
@@ -412,10 +461,22 @@ export function canvasToBlob(canvas) {
   });
 }
 
+// Hasil terakhir di-cache: klik ulang untuk slip & tema yang sama langsung
+// mengunduh blob yang sama tanpa render ulang.
+let lastResult = null;
+
 export async function downloadSlipPng(model, opts) {
-  const canvas = await renderSlipCanvas(model, opts);
-  const blob = await canvasToBlob(canvas);
-  const url = URL.createObjectURL(blob);
+  const theme = (opts && opts.theme) || 'light';
+  const sig = theme + '|' + JSON.stringify(model) + '|' + ((opts && opts.logoSources) || []).map((x) => String(x).length).join(',');
+  let res;
+  if (lastResult && lastResult.sig === sig) res = lastResult;
+  else {
+    const canvas = await renderSlipCanvas(model, opts);
+    const blob = await canvasToBlob(canvas);
+    res = lastResult = { sig, blob, width: canvas.width, height: canvas.height };
+    canvas.width = canvas.height = 0; // lepaskan memori kanvas besar
+  }
+  const url = URL.createObjectURL(res.blob);
   const a = document.createElement('a');
   a.href = url;
   a.download = slipFileName(model, 'png');
@@ -423,5 +484,5 @@ export async function downloadSlipPng(model, opts) {
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 4000);
-  return { width: canvas.width, height: canvas.height, bytes: blob.size, name: a.download };
+  return { width: res.width, height: res.height, bytes: res.blob.size, name: a.download };
 }

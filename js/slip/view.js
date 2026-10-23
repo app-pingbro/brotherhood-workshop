@@ -25,7 +25,8 @@ const SAFE_PX_FALLBACK = 1035;
 const FIT_PLAN = [
   { cols: 1, max: 12.5, min: 8.5 },
   { cols: 2, max: 10, min: 6.5 },
-  { cols: 3, max: 8, min: 4.2 }
+  { cols: 3, max: 8, min: 4.5 },
+  { cols: 4, max: 6, min: 2 }
 ];
 
 function initials(name) {
@@ -40,9 +41,9 @@ function orderCard(title, iconName, rows, cols) {
   for (let i = 0; i < rows.length; i += per) chunks.push(rows.slice(i, i + per));
   const table = (chunk) => `
     <table class="sg-table">
-      <colgroup><col class="c-no"><col><col class="c-jn"><col class="c-qt"><col class="c-hg"><col class="c-tt"></colgroup>
-      <thead><tr><th>No</th><th>Nama Order</th><th>Jenis</th><th class="r">Jumlah</th><th class="r">Harga Borongan</th><th class="r">Total</th></tr></thead>
-      <tbody>${chunk.map((r) => `<tr><td>${r.no}</td><td class="nm">${escapeHtml(r.nama)}</td><td>${escapeHtml(r.jenis)}</td><td class="r">${qtyId(r.jumlah)}</td><td class="r">${rupiah(r.harga)}</td><td class="r b">${rupiah(r.total)}</td></tr>`).join('')}</tbody>
+      <colgroup><col class="c-no"><col class="c-nm"><col class="c-jn"><col class="c-qt"><col class="c-hg"><col class="c-tt"></colgroup>
+      <thead><tr><th>No</th><th>Nama Order</th><th>Jenis</th><th>Jumlah</th><th>Harga Borongan</th><th>Total</th></tr></thead>
+      <tbody>${chunk.map((r) => `<tr><td class="n">${r.no}</td><td class="nm">${escapeHtml(r.nama)}</td><td>${escapeHtml(r.jenis)}</td><td class="n">${qtyId(r.jumlah)}</td><td class="n">${rupiah(r.harga)}</td><td class="n b">${rupiah(r.total)}</td></tr>`).join('')}</tbody>
     </table>`;
   return `
     <section class="sg-card">
