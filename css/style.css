@@ -599,7 +599,7 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 .op-total__label { font-size: 12.5px; font-weight: 700; letter-spacing: .03em; text-transform: uppercase; color: var(--color-text-medium); }
 .op-total__value { font-family: var(--font-display); font-size: 26px; font-weight: 800; line-height: 1.15; margin-top: 2px; overflow-wrap: anywhere; }
 .op-total__caption { font-size: 12.5px; color: var(--color-text-medium); margin-top: 2px; }
-.op-total__chips { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 11.5px; color: var(--color-text-low); }
+.op-total__chips { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 11.5px; color: var(--color-text-medium); }
 .op-total__chips span { white-space: nowrap; }
 .owner-panel__actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .owner-panel__pay { font-weight: 700; min-height: 40px; }
@@ -636,3 +636,122 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 .ledger-section-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; flex-wrap: wrap; }
 .ledger-section-head h3 { margin: 0; }
 .ledger-hint { font-size: 12.5px; color: var(--color-text-low); margin: 0 0 12px; line-height: 1.5; }
+
+/* ==========================================================================
+   Dashboard UI/UX — header, 4 kartu utama, Statistik Pengeluaran
+   Hanya token tema + tiga warna brand statis => Dark & Light memakai
+   font/ukuran/spacing yang SAMA; hanya warna yang berganti.
+   ========================================================================== */
+.dash-section { container-type: inline-size; }
+.dash-header h1 { font-size: 24px; line-height: 1.25; }
+.dash-header .subtitle { margin: 2px 0 0; }
+
+.period-chip {
+  display: inline-flex; flex-direction: column; gap: 1px; padding: 8px 14px 8px 30px; position: relative;
+  border-radius: 12px; background: var(--status-success-bg); border: 1px solid var(--color-border);
+  line-height: 1.25;
+}
+.period-chip strong { font-size: 13px; font-weight: 700; color: var(--status-success-fg); }
+.period-chip small { font-size: 12px; font-weight: 500; color: var(--color-text-medium); }
+.period-chip__dot { position: absolute; left: 13px; top: 50%; width: 8px; height: 8px; margin-top: -4px; border-radius: 50%; background: var(--status-success-fg); }
+.period-chip--closed { background: var(--color-surface-muted); }
+.period-chip--closed strong { color: var(--color-text-medium); }
+.period-chip--closed .period-chip__dot { background: var(--color-text-low); }
+
+/* ---- 4 kartu utama ------------------------------------------------------ */
+.kpi-hero-grid { display: grid; grid-template-columns: 1fr; gap: 14px; }
+@container (min-width: 520px) { .kpi-hero-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@container (min-width: 980px) { .kpi-hero-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+
+.kpi-hero {
+  --kh-fg: var(--status-success-fg);
+  --kh-tint: var(--status-success-bg);
+  --kh-line: rgba(16, 185, 129, .38);
+  --kh-icon: linear-gradient(135deg, #10B981, #047857);
+  display: flex; flex-direction: column; gap: 10px; min-width: 0; padding: 16px 18px;
+  border-radius: var(--radius-lg); border: 1px solid var(--kh-line); border-top: 3px solid var(--kh-fg);
+  background: linear-gradient(180deg, var(--kh-tint) 0%, transparent 70%), var(--color-surface);
+  box-shadow: var(--shadow-sm);
+}
+.kpi-hero--omzet {
+  --kh-fg: var(--status-info-fg); --kh-tint: var(--status-info-bg);
+  --kh-line: rgba(59, 130, 246, .38); --kh-icon: linear-gradient(135deg, #3B82F6, #1D4ED8);
+}
+.kpi-hero--keluar {
+  --kh-fg: var(--status-critical-fg); --kh-tint: var(--status-critical-bg);
+  --kh-line: rgba(239, 68, 68, .38); --kh-icon: linear-gradient(135deg, #EF4444, #B91C1C);
+}
+.kpi-hero--hasil {
+  --kh-fg: var(--status-highlight-fg); --kh-tint: var(--status-highlight-bg);
+  --kh-line: rgba(139, 92, 246, .40); --kh-icon: linear-gradient(135deg, #8B5CF6, #6D28D9);
+}
+.kpi-hero__top { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.kpi-hero__icon {
+  width: 42px; height: 42px; border-radius: 12px; flex-shrink: 0; color: #fff;
+  display: flex; align-items: center; justify-content: center; background: var(--kh-icon);
+  box-shadow: 0 4px 12px var(--kh-tint);
+}
+.kpi-hero__label { font-size: 13px; font-weight: 600; line-height: 1.3; color: var(--color-text-medium); min-width: 0; }
+.kpi-hero__value {
+  font-family: var(--font-display); font-size: 24px; font-weight: 800; line-height: 1.2;
+  letter-spacing: -0.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.kpi-hero__meta { display: flex; flex-direction: column; gap: 6px; margin-top: auto; min-width: 0; font-size: 12px; color: var(--color-text-medium); }
+.kpi-hero__meta .progress-label { margin-top: 4px; }
+.kh-sub { font-size: 12px; line-height: 1.4; color: var(--color-text-medium); overflow-wrap: anywhere; }
+.kh-chip {
+  align-self: flex-start; display: inline-flex; align-items: center; gap: 4px; max-width: 100%;
+  padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; line-height: 1.4;
+}
+.kh-chip--up { background: var(--status-success-bg); color: var(--status-success-fg); }
+.kh-chip--down { background: var(--status-critical-bg); color: var(--status-critical-fg); }
+.kh-chip--flat { background: var(--color-surface-muted); color: var(--color-text-medium); }
+
+/* ---- Statistik Pengeluaran --------------------------------------------- */
+.dash-stats { padding: 18px; }
+.dash-stats__head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px 16px; flex-wrap: wrap; margin-bottom: 14px; }
+.dash-stats__head h3 { margin: 0; font-size: 17px; }
+.dash-stats__total { font-size: 13px; font-weight: 600; color: var(--color-text-medium); }
+.dash-stats__grid { display: grid; grid-template-columns: 1fr; gap: 10px; }
+@container (min-width: 560px) { .dash-stats__grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@container (min-width: 900px) { .dash-stats__grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+
+.dstat {
+  --ds-fg: var(--status-info-fg); --ds-tint: var(--status-info-bg);
+  display: flex; align-items: flex-start; gap: 12px; min-width: 0; padding: 12px;
+  background: var(--color-surface-muted); border: 1px solid var(--color-border); border-radius: 12px;
+}
+.dstat--highlight { --ds-fg: var(--status-highlight-fg); --ds-tint: var(--status-highlight-bg); }
+.dstat--success { --ds-fg: var(--status-success-fg); --ds-tint: var(--status-success-bg); }
+.dstat--warning { --ds-fg: var(--status-warning-fg); --ds-tint: var(--status-warning-bg); }
+.dstat--critical { --ds-fg: var(--status-critical-fg); --ds-tint: var(--status-critical-bg); }
+.dstat--teal { --ds-fg: var(--color-owner-brotherhood); --ds-tint: rgba(20, 184, 166, .14); }
+.dstat__icon {
+  width: 36px; height: 36px; border-radius: 10px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center; background: var(--ds-tint); color: var(--ds-fg);
+}
+.dstat__body { min-width: 0; flex: 1; }
+.dstat__label { font-size: 12px; font-weight: 600; line-height: 1.3; color: var(--color-text-medium); }
+.dstat__value { font-family: var(--font-display); font-size: 16px; font-weight: 800; line-height: 1.3; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dstat__bar { height: 6px; border-radius: 999px; background: var(--color-border-strong); overflow: hidden; margin-top: 8px; }
+.dstat__bar > span { display: block; height: 100%; border-radius: 999px; background: var(--ds-fg); transition: width .3s ease; }
+.dstat__pct, .dstat__note { font-size: 11.5px; line-height: 1.4; color: var(--color-text-medium); margin-top: 4px; }
+.dstat__note { margin-top: 8px; }
+.dash-stats__footnote { margin: 12px 0 0; font-size: 12px; line-height: 1.5; color: var(--color-text-medium); }
+
+/* ---- Progress penyelesaian di Owner panel ------------------------------ */
+.op-progress { height: 6px; border-radius: 999px; background: var(--color-border-strong); overflow: hidden; margin-top: 8px; }
+.op-progress > span { display: block; height: 100%; border-radius: 999px; background: var(--op-fg); transition: width .3s ease; }
+
+@media (max-width: 640px) {
+  .dash-header h1 { font-size: 21px; }
+  .period-chip { align-self: stretch; }
+  .kpi-hero { padding: 14px 16px; }
+  .kpi-hero__value { font-size: 22px; }
+  .dash-stats { padding: 14px; }
+}
+
+/* Perbaikan kecil: `.card + .card` memberi margin-top pada panel Owner kedua (SUNRISE) sehingga
+   lebih rendah dari PINGBRO. Di grid jarak sudah diatur oleh `gap`. */
+#dash-owner-panels > .owner-panel { margin-top: 0; }
+.period-chip strong, .period-chip small { display: block; }

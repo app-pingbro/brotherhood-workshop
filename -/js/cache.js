@@ -1,0 +1,227 @@
+// ============================================================================
+// Instant UX cache layer (gas-instant-ux skill, Prinsip 2-3-4 adapted for the
+// gas-pro-api fetch() architecture — this app has no google.script.run, so
+// "cache/state instead of a fresh request" means an in-memory Map backed by
+// sessionStorage, with a stale-while-revalidate read helper for GET actions.
+//
+// NOT used for POST/writes — those always go straight to postData() in
+// api.js, unchanged. This module only affects how *reads* are served; it
+// never changes what gets saved, validated, or computed on the server.
+//
+// sessionStorage (not localStorage) on purpose: cached payloads are scoped
+// to the logged-in session/token, and should disappear with it rather than
+// leak into the next login on a shared computer.
+// ============================================================================
+import { fetchData } from './api.js';
+
+const mem = new Map(); // cacheKey -> { data, ts }
+const inflight = new Map(); // cacheKey -> Promise of a NON-forced fetch already on the wire
+const PREFIX = 'bw_cache_';
+
+// Navigation epoch (Fitur: optimasi perpindahan tools). The router bumps this
+// every time a page is (re)mounted. A swr() call remembers the epoch it was
+// started in, and when its network response finally arrives, it skips the
+// page-painting `onData` callback if the user has since moved to another page
+// — the response is still written to the cache (so the NEXT visit is instant),
+// it just no longer repaints a screen that belongs to a different page. This
+// is what stops "old page content flashes then disappears" after a fast
+// menu switch, without touching any individual page's code.
+let navEpoch = 0;
+export function bumpNavEpoch() { navEpoch += 1; return navEpoch; }
+
+function readSession(key) {
+  try {
+    const raw = sessionStorage.getItem(PREFIX + key);
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function writeSession(key, entry) {
+  try {
+    sessionStorage.setItem(PREFIX + key, JSON.stringify(entry));
+  } catch (e) {
+    // quota exceeded / private-mode — in-memory cache still works for this tab
+  }
+}
+
+function removeSession(key) {
+  try { sessionStorage.removeItem(PREFIX + key); } catch (e) { /* ignore */ }
+}
+
+export function cacheKey(action, params) {
+  const keys = Object.keys(params || {}).sort();
+  const normalized = {};
+  keys.forEach((k) => { normalized[k] = params[k]; });
+  return `${action}::${JSON.stringify(normalized)}`;
+}
+
+/**
+ * Read-only cache peek — never touches the network. Used to paint a page
+ * instantly (no skeleton) on first mount if a previous visit already has
+ * data for this exact action+params.
+ */
+export function peek(action, params) {
+  return peekKey(cacheKey(action, params));
+}
+
+export function peekKey(key) {
+  let entry = mem.get(key);
+  if (!entry) {
+    entry = readSession(key);
+    if (entry) mem.set(key, entry);
+  }
+  return entry ? entry.data : undefined;
+}
+
+/**
+ * Generic stale-while-revalidate primitive, keyed by an arbitrary string
+ * (use this when a page needs to cache something more than one raw
+ * fetchData() call — e.g. Dashboard's "recent transactions" merges two
+ * endpoints into one derived list).
+ *  - If cached data exists, `onData(data, false)` fires synchronously right
+ *    away (before any network round-trip) so the UI paints instantly.
+ *  - `fetcher()` then always runs unless the cache is still within `ttlMs`
+ *    and `force` was not requested — when it resolves, `onData` fires again
+ *    with `isFresh=true` (even if the value is unchanged; the page
+ *    renderers here are cheap to re-run and idempotent).
+ *  - Resolves/rejects with fetcher()'s result, so a first-time (no cache)
+ *    caller can still `await` it directly.
+ */
+export async function swr(key, fetcher, onData, opts = {}) {
+  const ttlMs = opts.ttlMs ?? 30000;
+  let entry = mem.get(key);
+  if (!entry) {
+    entry = readSession(key);
+    if (entry) mem.set(key, entry);
+  }
+
+  if (entry && typeof onData === 'function') {
+    try { onData(entry.data, false); } catch (e) { console.error(e); }
+  }
+
+  if (entry && !opts.force && (Date.now() - entry.ts) < ttlMs) {
+    return entry.data;
+  }
+
+  // De-duplicate identical in-flight reads: rapid menu switching (or a page
+  // that asks for the same action twice) joins the request already on the
+  // wire instead of firing another one to Apps Script. A FORCED read (used
+  // right after a save/delete) never joins an older in-flight request — that
+  // one may have been issued before the write and would return stale data.
+  const epochAtStart = navEpoch;
+  let pending = !opts.force ? inflight.get(key) : null;
+  if (!pending) {
+    pending = (async () => {
+      const data = await fetcher();
+      // If a save/delete invalidated this key (or a newer forced read took
+      // over) while we were waiting, this response may predate that write —
+      // hand it to our own caller but never put it in the shared cache.
+      if (inflight.get(key) === pending) {
+        const fresh = { data, ts: Date.now() };
+        mem.set(key, fresh);
+        writeSession(key, fresh);
+      }
+      return data;
+    })();
+    inflight.set(key, pending);
+    const clear = () => { if (inflight.get(key) === pending) inflight.delete(key); };
+    pending.then(clear, clear);
+  }
+
+  const data = await pending;
+  // Skip repainting if the user navigated elsewhere meanwhile. Forced reads
+  // and `global` callers (router/Master Data pushing lookups into app state)
+  // always run — they update shared state, not a page's own DOM.
+  const stale = epochAtStart !== navEpoch && !opts.force && !opts.global;
+  if (!stale && typeof onData === 'function') {
+    try { onData(data, true); } catch (e) { console.error(e); }
+  }
+  return data;
+}
+
+/**
+ * Stale-while-revalidate for a single plain fetchData(action, params) GET —
+ * the common case. See swr() above for the underlying behavior.
+ * opts.silent: no error toast (background prefetch).
+ */
+export async function fetchSWR(action, params, onData, opts = {}) {
+  return swr(cacheKey(action, params), () => fetchData(action, params, { silent: opts.silent }), onData, opts);
+}
+
+/**
+ * Put data we ALREADY have into the cache as if it had just been fetched
+ * (e.g. the reference data the login response carries), so the first screen
+ * paints with zero extra round trips.
+ */
+export function seed(action, params, data) {
+  const key = cacheKey(action, params);
+  const entry = { data, ts: Date.now() };
+  mem.set(key, entry);
+  writeSession(key, entry);
+}
+
+/**
+ * Drop cached entries so the next read is forced to hit the network again.
+ * Call this right after a successful write (save/delete/close period/etc)
+ * that affects the given action. With no `params`, every cached variant of
+ * that action (different filters/periods) is cleared.
+ */
+export function invalidate(action, params) {
+  // Anything already on the wire for this action was issued BEFORE the write
+  // that is calling invalidate() — never let a later read join it.
+  [...inflight.keys()].forEach((k) => { if (params === undefined ? k.startsWith(action + '::') : k === cacheKey(action, params)) inflight.delete(k); });
+  if (params === undefined) {
+    [...mem.keys()].forEach((k) => { if (k.startsWith(action + '::')) mem.delete(k); });
+    try {
+      Object.keys(sessionStorage)
+        .filter((k) => k.startsWith(PREFIX + action + '::'))
+        .forEach((k) => sessionStorage.removeItem(k));
+    } catch (e) { /* ignore */ }
+    return;
+  }
+  removeSession(cacheKey(action, params));
+  mem.delete(cacheKey(action, params));
+}
+
+export function invalidateKey(key) {
+  inflight.delete(key);
+  mem.delete(key);
+  removeSession(key);
+}
+
+export function invalidatePrefix(prefix) {
+  [...inflight.keys()].forEach((k) => { if (k.startsWith(prefix)) inflight.delete(k); });
+  [...mem.keys()].forEach((k) => { if (k.startsWith(prefix)) mem.delete(k); });
+  try {
+    Object.keys(sessionStorage)
+      .filter((k) => k.startsWith(PREFIX + prefix))
+      .forEach((k) => sessionStorage.removeItem(k));
+  } catch (e) { /* ignore */ }
+}
+
+export function invalidateAll() {
+  inflight.clear();
+  mem.clear();
+  try {
+    Object.keys(sessionStorage).filter((k) => k.startsWith(PREFIX)).forEach((k) => sessionStorage.removeItem(k));
+  } catch (e) { /* ignore */ }
+}
+
+/**
+ * Like invalidateAll(), but keeps entries whose key starts with one of
+ * `keepPrefixes`. Used on logout so the login screen can still show the
+ * company logo (it lives inside the cached getLookups payload) — everything
+ * else a user saw is dropped.
+ */
+export function invalidateAllExcept(keepPrefixes) {
+  const keep = (k) => keepPrefixes.some((p) => k.startsWith(p));
+  [...inflight.keys()].forEach((k) => { if (!keep(k)) inflight.delete(k); });
+  [...mem.keys()].forEach((k) => { if (!keep(k)) mem.delete(k); });
+  try {
+    Object.keys(sessionStorage)
+      .filter((k) => k.startsWith(PREFIX) && !keep(k.slice(PREFIX.length)))
+      .forEach((k) => sessionStorage.removeItem(k));
+  } catch (e) { /* ignore */ }
+}

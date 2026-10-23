@@ -64,6 +64,7 @@
   color-scheme: light;
 }
 
+/* Catatan: --font-display sengaja HANYA didefinisikan di :root (atas) agar Dark & Light memakai font yang sama; tema hanya mengubah warna. */
 /* ---- Dark "Sovereign Slate" (system preference, unless overridden) --- */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
@@ -109,8 +110,6 @@
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.30);
     --shadow-md: 0 6px 20px rgba(0, 0, 0, 0.40);
     --shadow-lg: 0 20px 48px rgba(0, 0, 0, 0.55);
-
-    --font-display: 'Inter', sans-serif;
 
     color-scheme: dark;
   }
@@ -160,8 +159,6 @@
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.30);
   --shadow-md: 0 6px 20px rgba(0, 0, 0, 0.40);
   --shadow-lg: 0 20px 48px rgba(0, 0, 0, 0.55);
-
-  --font-display: 'Inter', sans-serif;
 
   color-scheme: dark;
 }

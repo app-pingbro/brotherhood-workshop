@@ -47,26 +47,28 @@
 import { fetchSWR } from '../cache.js';
 import { formatCurrency, skeletonKpis, emptyState, escapeHtml, pick, badge, formatPeriodLabel } from '../ui.js';
 import { icon } from '../icons.js';
-import { getCurrentPeriod, setOwnerFilter } from '../state.js';
+import { getCurrentPeriod, setOwnerFilter, getUser } from '../state.js';
 import { EXPENSE_OWNERS } from '../config.js';
 import { openSettleModal } from './SaldoPiutang.js';
 
 export async function render(container) {
   const period = getCurrentPeriod();
+  const user = getUser();
+  const who = String((user && (user.name || user.email)) || 'Admin').trim().split(/\s+/)[0] || 'Admin';
   container.innerHTML = `
-    <div class="page-header">
-      <div><h1>Dashboard</h1><div class="subtitle">${period ? escapeHtml(formatPeriodLabel(period)) : 'Pilih periode di kanan atas'}</div></div>
+    <div class="page-header dash-header">
+      <div>
+        <h1>Selamat Datang, ${escapeHtml(who)}</h1>
+        <div class="subtitle">${period ? 'Berikut ringkasan keuangan workshop untuk periode ' + escapeHtml(formatPeriodLabel(period)) : 'Pilih periode di kanan atas'}</div>
+      </div>
       <div class="page-header__actions" id="dash-period-badge"></div>
     </div>
-    <div id="dash-kpis">${skeletonKpis(5)}</div>
+    <div id="dash-kpis" class="dash-section">${skeletonKpis(4)}</div>
     <div class="grid grid-2 mt-16" id="dash-owner-panels">
       <div class="card"><div class="skeleton-line" style="height:190px"></div></div>
       <div class="card"><div class="skeleton-line" style="height:190px"></div></div>
     </div>
-    <div class="mt-16">
-      <h3 class="mb-8">Statistik Lain</h3>
-      <div id="dash-stats">${skeletonKpis(4)}</div>
-    </div>
+    <div class="mt-16 dash-section" id="dash-stats">${skeletonKpis(4)}</div>
   `;
 
   if (!period) {
@@ -92,7 +94,19 @@ function renderPeriodBadge(period) {
   const root = document.getElementById('dash-period-badge');
   if (!root) return;
   const isClosed = String(period.status || '').toLowerCase() === 'closed';
-  root.innerHTML = badge(isClosed ? 'Periode Ditutup' : 'Periode Berjalan', isClosed ? 'neutral' : 'success');
+  root.innerHTML = `<div class="period-chip ${isClosed ? 'period-chip--closed' : ''}">
+    <span class="period-chip__dot"></span>
+    <div><strong>${isClosed ? 'Periode Ditutup' : 'Periode Berjalan'}</strong><small>${escapeHtml(periodRange(period))}</small></div>
+  </div>`;
+}
+
+// "01 – 30 September 2026", derived from the period's month/year only.
+function periodRange(period) {
+  const m = Number(period.month), y = Number(period.year);
+  if (!(m >= 1 && m <= 12) || !y) return '';
+  const last = new Date(y, m, 0).getDate();
+  const monthName = formatPeriodLabel(period).replace(/\s+\d{4}$/, '');
+  return `01 – ${String(last).padStart(2, '0')} ${monthName} ${y}`;
 }
 
 // ---- Recap + Kasbon (KPI hero row + Statistik Lain) ------------------------
@@ -108,8 +122,8 @@ async function loadRecapSection(period) {
   let latestDeductions = [];
   const repaint = () => {
     if (!latestRecap) return;
-    renderKpis(latestRecap, latestDeductions);
-    renderStats(latestRecap);
+    renderKpis(latestRecap);
+    renderStats(latestRecap, latestDeductions);
     renderOwnerPanels(latestRecap, ctx);
   };
   const onRecap = (recap) => {
@@ -180,74 +194,107 @@ function computeKasbonTotal(deductions) {
     .reduce((s, r) => s + (Number(r.nominal) || 0), 0);
 }
 
-function renderKpis(recap, deductions) {
+// ---- 4 kartu utama ---------------------------------------------------------
+// Semua dari satu respons getMonthlyRecap (tanpa request tambahan):
+//   Saldo Kas Perusahaan = saldoAkhir  (Saldo Awal Final + Hasil Bulan - Bayar + Terima;
+//                          SATU angka perusahaan dari rantai saldo backend — BUKAN
+//                          jumlah saldo per Owner, jadi tidak pernah terhitung ganda)
+//   Total Omzet          = totalPemasukan      Total Pengeluaran = totalBiaya
+//   Hasil Bersih         = hasilBulan
+function renderKpis(recap) {
   const root = document.getElementById('dash-kpis');
   if (!recap) {
     root.innerHTML = `<div class="notice notice-critical">${icon('alert')} Gagal memuat ringkasan bulan ini.</div>`;
     return;
   }
-  const totalOmzet = pick(recap, ['totalPemasukan', 'total_pemasukan']);
-  const totalPengeluaran = pick(recap, ['totalBiaya', 'total_biaya']);
-  const hasilBersih = pick(recap, ['hasilBulan', 'hasil_bulan'], totalOmzet - totalPengeluaran);
-  const gajiTotal = computeGajiTotal(recap);
-  const kasbonTotal = computeKasbonTotal(deductions);
+  const totalOmzet = Number(pick(recap, ['totalPemasukan', 'total_pemasukan'])) || 0;
+  const totalPengeluaran = Number(pick(recap, ['totalBiaya', 'total_biaya'])) || 0;
+  const hasilBersih = Number(pick(recap, ['hasilBulan', 'hasil_bulan'], totalOmzet - totalPengeluaran)) || 0;
+  const saldoAwalFinal = Number(pick(recap, ['saldoAwalFinal', 'saldo_awal_final'])) || 0;
+  const saldoKas = Number(pick(recap, ['saldoAkhir', 'saldo_akhir'], saldoAwalFinal + hasilBersih)) || 0;
+  const perOwner = Object.values(recap.perOwner || {});
+  const omzetJahit = perOwner.reduce((s, o) => s + (Number(o.jahit) || 0), 0);
+  const omzetSablon = perOwner.reduce((s, o) => s + (Number(o.sablon) || 0), 0);
 
-  // "Pengeluaran vs Omzet" — indikator kesehatan operasional sederhana dari
-  // data yang sudah ada (tidak ada angka baru/dummy): berapa persen Omzet
-  // yang terpakai untuk Pengeluaran periode ini.
+  // Perubahan kas selama periode ini = Saldo Akhir - Saldo Awal Final (dari data yang sama).
+  const delta = saldoKas - saldoAwalFinal;
+  const deltaChip = Math.abs(delta) < 0.5
+    ? '<span class="kh-chip kh-chip--flat">Tidak berubah dari awal periode</span>'
+    : `<span class="kh-chip kh-chip--${delta > 0 ? 'up' : 'down'}">${delta > 0 ? '↑' : '↓'} ${formatCurrency(Math.abs(delta))} dari awal periode</span>`;
+
+  // Pengeluaran vs Omzet — berapa persen Omzet yang terpakai.
   const overBudget = totalOmzet > 0 && totalPengeluaran > totalOmzet;
-  const pctPengeluaran = totalOmzet > 0 ? (totalPengeluaran / totalOmzet) * 100 : (totalPengeluaran > 0 ? 100 : 0);
-  const fillTone = overBudget ? 'progress-fill--critical' : (pctPengeluaran >= 80 ? 'progress-fill--warning' : '');
+  const pct = totalOmzet > 0 ? (totalPengeluaran / totalOmzet) * 100 : (totalPengeluaran > 0 ? 100 : 0);
+  const fillTone = overBudget ? 'progress-fill--critical' : (pct >= 80 ? 'progress-fill--warning' : '');
 
-  root.innerHTML = `<div class="grid grid-kpi">
-    <div class="card kpi-card kpi-card--accent">
-      <div class="label">Total Omzet</div>
-      <div class="value">${formatCurrency(totalOmzet)}</div>
-    </div>
-    <div class="card kpi-card">
-      <div class="label">Total Pengeluaran</div>
-      <div class="value">${formatCurrency(totalPengeluaran)}</div>
-      <div class="progress-track mt-8"><div class="progress-fill ${fillTone}" style="width:${Math.max(0, Math.min(100, pctPengeluaran)).toFixed(0)}%"></div></div>
-      <div class="progress-label"><span>${pctPengeluaran.toFixed(0)}% dari Omzet</span>${overBudget ? badge('Melebihi Omzet', 'critical') : ''}</div>
-    </div>
-    <div class="card kpi-card">
-      <div class="label">Hasil Bersih</div>
-      <div class="value" style="color:${hasilBersih >= 0 ? 'var(--status-success-fg)' : 'var(--status-critical-fg)'}">${formatCurrency(hasilBersih)}</div>
-      <span class="delta ${hasilBersih >= 0 ? 'up' : 'down'}">${hasilBersih >= 0 ? '↑ Surplus' : '↓ Defisit'}</span>
-    </div>
-    <div class="card kpi-card">
-      <div class="label">Total Gaji &amp; Lembur</div>
-      <div class="value">${formatCurrency(gajiTotal)}</div>
-    </div>
-    <div class="card kpi-card">
-      <div class="label">Total Kasbon</div>
-      <div class="value">${formatCurrency(kasbonTotal)}</div>
-      <div class="mt-8">${kasbonTotal > 0 ? badge('Ada Kasbon berjalan', 'warning') : badge('Tidak ada Kasbon', 'success')}</div>
-    </div>
+  const card = (tone, iconName, label, value, valueColor, meta) => `
+    <article class="kpi-hero kpi-hero--${tone}">
+      <div class="kpi-hero__top">
+        <span class="kpi-hero__icon">${icon(iconName, 22)}</span>
+        <div class="kpi-hero__label">${label}</div>
+      </div>
+      <div class="kpi-hero__value" ${valueColor ? `style="color:${valueColor}"` : ''}>${formatCurrency(value)}</div>
+      <div class="kpi-hero__meta">${meta}</div>
+    </article>`;
+
+  root.innerHTML = `<div class="kpi-hero-grid">
+    ${card('saldo', 'wallet', 'Saldo Kas Perusahaan', saldoKas, saldoKas < 0 ? 'var(--status-critical-fg)' : '',
+      `${deltaChip}<div class="kh-sub">Saldo awal periode ${formatCurrency(saldoAwalFinal)}</div>`)}
+    ${card('omzet', 'trendUp', 'Total Omzet', totalOmzet, '',
+      `<div class="kh-sub">Jahit ${formatCurrency(omzetJahit)} · Sablon ${formatCurrency(omzetSablon)}</div>`)}
+    ${card('keluar', 'receipt', 'Total Pengeluaran', totalPengeluaran, '',
+      `<div class="progress-track"><div class="progress-fill ${fillTone}" style="width:${Math.max(0, Math.min(100, pct)).toFixed(0)}%"></div></div>
+       <div class="progress-label"><span>${pct.toFixed(0)}% dari Omzet</span>${overBudget ? badge('Melebihi Omzet', 'critical') : ''}</div>`)}
+    ${card('hasil', 'chart', 'Hasil Bersih', hasilBersih, hasilBersih >= 0 ? 'var(--status-success-fg)' : 'var(--status-critical-fg)',
+      `<span class="kh-chip kh-chip--${hasilBersih >= 0 ? 'up' : 'down'}">${hasilBersih >= 0 ? '↑ Surplus' : '↓ Defisit'}</span><div class="kh-sub">Omzet − Pengeluaran</div>`)}
   </div>`;
 }
 
-function renderStats(recap) {
+// ---- Statistik Pengeluaran ---------------------------------------------------
+// Urutan: Gaji Jahit, Gaji Sablon, Gaji Harian, Gaji Minggu, Lembur, Kasbon,
+// Pengeluaran PINGBRO, Pengeluaran SUNRISE. Sumber: recap.gaji.* dan
+// recap.pengeluaran.* (getMonthlyRecap) + Kasbon dari getPayrollDeductions —
+// request yang sama dengan sebelumnya. Persentase = bagian dari Total
+// Pengeluaran. Gaji & Lembur sudah tercatat sebagai Pengeluaran Owner (lihat
+// Rekap.gs), jadi barisnya adalah RINCIAN, bukan tambahan; Kasbon adalah
+// potongan gaji (bukan biaya usaha) sehingga tidak diberi persentase.
+function renderStats(recap, deductions) {
   const root = document.getElementById('dash-stats');
   if (!recap) { root.innerHTML = ''; return; }
-  // NOTE: backend (Rekap.gs) nests the payroll/expense breakdown one level
-  // down under recap.gaji.* and recap.pengeluaran.* (not top-level fields) —
-  // read from those sub-objects, confirmed against the actual backend source.
   const gaji = recap.gaji || {};
   const pengeluaran = recap.pengeluaran || {};
+  const totalBiaya = Number(pick(recap, ['totalBiaya', 'total_biaya'])) || 0;
   const items = [
-    ['Gaji Jahit', pick(gaji, ['gajiJahit', 'gaji_jahit'])],
-    ['Gaji Sablon', pick(gaji, ['gajiSablon', 'gaji_sablon'])],
-    ['Gaji Harian', pick(gaji, ['gajiHarian', 'gaji_harian'])],
-    ['Gaji Minggu', pick(gaji, ['gajiMinggu', 'gaji_minggu'])],
-    ['Lembur', pick(gaji, ['lembur', 'totalLembur', 'total_lembur'])],
-    ['Pengeluaran PINGBRO', pick(pengeluaran, ['pingbro'])],
-    ['Pengeluaran SUNRISE', pick(pengeluaran, ['sunrise'])],
-    ['Saldo Akhir (Saldo Perusahaan)', pick(recap, ['saldoAkhir', 'saldo_akhir'])]
+    { label: 'Gaji Jahit', icon: 'scissors', tone: 'info', val: pick(gaji, ['gajiJahit', 'gaji_jahit']) },
+    { label: 'Gaji Sablon', icon: 'shirt', tone: 'highlight', val: pick(gaji, ['gajiSablon', 'gaji_sablon']) },
+    { label: 'Gaji Harian', icon: 'calendar', tone: 'success', val: pick(gaji, ['gajiHarian', 'gaji_harian']) },
+    { label: 'Gaji Minggu', icon: 'calendar', tone: 'warning', val: pick(gaji, ['gajiMinggu', 'gaji_minggu']) },
+    { label: 'Lembur', icon: 'clock', tone: 'critical', val: pick(gaji, ['lembur', 'totalLembur', 'total_lembur']) },
+    { label: 'Kasbon', icon: 'coins', tone: 'teal', val: computeKasbonTotal(deductions), noPct: true },
+    { label: 'Pengeluaran PINGBRO', icon: 'building', tone: 'success', val: pick(pengeluaran, ['pingbro']) },
+    { label: 'Pengeluaran SUNRISE', icon: 'sun', tone: 'highlight', val: pick(pengeluaran, ['sunrise']) }
   ];
-  root.innerHTML = `<div class="stat-strip">${items.map(([label, val]) => `
-    <div class="stat-strip__item"><div class="label">${escapeHtml(label)}</div><div class="value">${formatCurrency(val)}</div></div>
-  `).join('')}</div>`;
+  root.innerHTML = `<section class="card dash-stats">
+    <div class="dash-stats__head">
+      <h3>Statistik Pengeluaran</h3>
+      <span class="dash-stats__total">Total Pengeluaran ${formatCurrency(totalBiaya)}</span>
+    </div>
+    <div class="dash-stats__grid">${items.map((it) => {
+      const v = Number(it.val) || 0;
+      const pct = totalBiaya > 0 ? (v / totalBiaya) * 100 : 0;
+      return `<div class="dstat dstat--${it.tone}" data-stat="${escapeHtml(it.label)}">
+        <div class="dstat__icon">${icon(it.icon, 18)}</div>
+        <div class="dstat__body">
+          <div class="dstat__label">${escapeHtml(it.label)}</div>
+          <div class="dstat__value">${formatCurrency(v)}</div>
+          ${it.noPct
+            ? '<div class="dstat__note">Potongan gaji</div>'
+            : `<div class="dstat__bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(Math.min(100, pct))}"><span style="width:${Math.max(0, Math.min(100, pct)).toFixed(0)}%"></span></div><div class="dstat__pct">${pct.toFixed(0)}%</div>`}
+        </div>
+      </div>`;
+    }).join('')}</div>
+    <p class="dash-stats__footnote">Persentase = bagian dari Total Pengeluaran. Gaji &amp; Lembur sudah termasuk di Pengeluaran Owner; Kasbon adalah potongan gaji, bukan biaya usaha.</p>
+  </section>`;
 }
 
 // ---- Owner panels (PINGBRO / SUNRISE) ---------------------------------
@@ -280,7 +327,8 @@ function renderOwnerPanels(recap, ctx) {
   }
 
   const closed = String((ctx.period && ctx.period.status) || '').toLowerCase() === 'closed';
-  root.innerHTML = entries.map((o) => ownerPanelHtml(o, closed)).join('');
+  const periodLabel = formatPeriodLabel(ctx.period);
+  root.innerHTML = entries.map((o) => ownerPanelHtml(o, closed, periodLabel)).join('');
   root.querySelectorAll('.owner-panel__cta').forEach((btn) => {
     btn.addEventListener('click', () => {
       setOwnerFilter(btn.dataset.ownerCode);
@@ -322,7 +370,7 @@ function ownerTotal(o) {
   return (Number(o.jahit) || 0) + (Number(o.sablon) || 0) - (Number(o.pengeluaran) || 0);
 }
 
-function ownerPanelHtml(o, closed) {
+function ownerPanelHtml(o, closed, periodLabel) {
   const jahit = Number(o.jahit) || 0;
   const sablon = Number(o.sablon) || 0;
   const pengeluaran = Number(o.pengeluaran) || 0;
@@ -342,11 +390,11 @@ function ownerPanelHtml(o, closed) {
     : (mode === 'RECEIPT' ? 'Perusahaan berhak menerima' : 'Tidak ada pembayaran');
   const valueColor = mode === 'RECEIPT' ? 'var(--status-critical-fg)' : (mode === 'PAYMENT' ? 'var(--status-success-fg)' : 'var(--color-text-high)');
 
-  const chips = [];
-  if (sisaLalu !== 0) chips.push(`Sisa periode lalu ${formatCurrency(sisaLalu)}`);
-  if (piutangAwal !== 0) chips.push(`Piutang Awal ${formatCurrency(piutangAwal)}`);
-  if (dibayar !== 0) chips.push(`Sudah dibayar ${formatCurrency(dibayar)}`);
-  if (diterima !== 0) chips.push(`Sudah diterima ${formatCurrency(diterima)}`);
+  // Progress penyelesaian: berapa bagian dari kewajiban kotor (sisa lalu + hasil
+  // periode + piutang awal) yang sudah dibayar (Total > 0) / diterima (Total < 0).
+  const gross = sisaLalu + hasil + piutangAwal;
+  const settledAmt = gross >= 0 ? dibayar : diterima;
+  const settledPct = Math.abs(gross) > SETTLED_EPS ? Math.max(0, Math.min(100, (settledAmt / Math.abs(gross)) * 100)) : 0;
 
   const actionBtn = mode === 'NONE'
     ? `<button type="button" class="btn btn-secondary owner-panel__pay" data-mode="NONE" data-owner-id="${escapeHtml(o.owner_id)}" disabled>${icon('check', 15)} Tidak ada pembayaran</button>`
@@ -358,7 +406,7 @@ function ownerPanelHtml(o, closed) {
         <div class="op-avatar">${icon(codeLower === 'sunrise' ? 'sun' : 'building', 22)}</div>
         <div class="op-title">
           <h2 class="op-name owner-panel__name">${escapeHtml(name)}</h2>
-          <div class="op-sub">Ringkasan keuangan periode ini</div>
+          <div class="op-sub">Ringkasan keuangan periode ${escapeHtml(periodLabel || 'ini')}</div>
         </div>
         <span class="op-badge ${closed ? 'op-badge--closed' : ''}">${closed ? 'Ditutup' : 'Aktif'}</span>
       </header>
@@ -389,7 +437,8 @@ function ownerPanelHtml(o, closed) {
           <div class="op-total__label label">Total Harus Dibayar ${escapeHtml(name)}</div>
           <div class="op-total__value value" style="color:${valueColor}">${formatCurrency(total)}</div>
           <div class="op-total__caption">${caption}</div>
-          ${chips.length ? `<div class="op-total__chips owner-panel__breakdown">${chips.map((t) => `<span>${escapeHtml(t)}</span>`).join('')}</div>` : ''}
+          <div class="op-progress" role="progressbar" aria-label="Penyelesaian Total Harus Dibayar ${escapeHtml(name)}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(settledPct)}"><span style="width:${settledPct.toFixed(0)}%"></span></div>
+          <div class="op-total__chips owner-panel__breakdown"><span>Sisa periode lalu: ${formatCurrency(sisaLalu)}</span><span>${gross >= 0 || diterima === 0 ? 'Sudah dibayar' : 'Sudah diterima'}: ${formatCurrency(gross >= 0 ? dibayar : diterima)}</span></div>
         </div>
         <div class="owner-panel__actions">
           ${actionBtn}

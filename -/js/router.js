@@ -1,0 +1,421 @@
+// ============================================================================
+// Hash-based client router. Owns the global app shell (sidebar + topbar),
+// the shared month/period + owner-unit filters, and swaps page content
+// into #view without ever reloading the document — a true SPA.
+// ============================================================================
+import { OWNERS, EXPENSE_OWNERS } from './config.js';
+import { ownerIdByCode } from './lookups.js';
+import { icon } from './icons.js';
+import { fetchData } from './api.js';
+import { fetchSWR, invalidate, bumpNavEpoch } from './cache.js';
+import {
+  getState, onStateChange, getToken, getUser, setLookups, getLookups,
+  getCurrentPeriod, setCurrentPeriodId, getOwnerFilter, setOwnerFilter,
+  getCompanyLogoUrl
+} from './state.js';
+import { isAuthenticated, requireAuth, logout } from './auth.js';
+import { toggleTheme, currentTheme } from './theme.js';
+import { toast, formatPeriodLabel } from './ui.js';
+
+import * as LoginPage from './pages/Login.js';
+import * as DashboardPage from './pages/Dashboard.js';
+import * as JahitPage from './pages/Jahit.js';
+import * as SablonPage from './pages/Sablon.js';
+import * as ImportExcelPage from './pages/ImportExcel.js';
+import * as GajiJahitPage from './pages/GajiJahit.js';
+import * as GajiSablonPage from './pages/GajiSablon.js';
+import * as GajiHarianPage from './pages/GajiHarian.js';
+import * as KasbonPage from './pages/Kasbon.js';
+import * as PengeluaranPage from './pages/Pengeluaran.js';
+import * as SlipGajiPage from './pages/SlipGaji.js';
+import * as RekapBulananPage from './pages/RekapBulanan.js';
+import * as MasterDataPage from './pages/MasterData.js';
+
+const NAV = [
+  { group: 'Ringkasan', items: [
+    { path: '#/dashboard', label: 'Dashboard', icon: 'dashboard', page: DashboardPage }
+  ] },
+  { group: 'Transaksi', items: [
+    { path: '#/jahit', label: 'Jahit', icon: 'scissors', page: JahitPage },
+    { path: '#/sablon', label: 'Sablon', icon: 'droplet', page: SablonPage },
+    { path: '#/import-excel', label: 'Import Excel', icon: 'upload', page: ImportExcelPage }
+  ] },
+  { group: 'Penggajian', items: [
+    { path: '#/gaji-jahit', label: 'Gaji Jahit', icon: 'needle', page: GajiJahitPage },
+    { path: '#/gaji-sablon', label: 'Gaji Sablon', icon: 'droplet', page: GajiSablonPage },
+    { path: '#/gaji-harian', label: 'Gaji Harian & Lembur', icon: 'clock', page: GajiHarianPage },
+    { path: '#/kasbon', label: 'Kasbon & Potongan', icon: 'minus', page: KasbonPage },
+    { path: '#/slip-gaji', label: 'Slip Gaji', icon: 'file', page: SlipGajiPage }
+  ] },
+  { group: 'Keuangan', items: [
+    { path: '#/pengeluaran', label: 'Pengeluaran', icon: 'receipt', page: PengeluaranPage },
+    { path: '#/rekap-bulanan', label: 'Rekap Bulanan', icon: 'chart', page: RekapBulananPage }
+  ] },
+  { group: 'Sistem', items: [
+    { path: '#/master-data', label: 'Master Data', icon: 'settings', page: MasterDataPage }
+  ] }
+];
+
+const ROUTES = {};
+NAV.forEach((g) => g.items.forEach((i) => { ROUTES[i.path] = i; }));
+ROUTES['#/login'] = { path: '#/login', page: LoginPage, label: 'Login' };
+
+let shellBuilt = false;
+let currentPage = null;
+let lookupsLoaded = false;
+// Race guards (Fitur: optimasi perpindahan tools). Every route change/mount
+// takes a ticket; whatever finishes after a NEWER ticket was issued is
+// discarded, so a slow earlier page can never paint over (or replace) the
+// page the user actually ended up on.
+let routeTicket = 0;
+let mountTicket = 0;
+
+export function startRouter() {
+  window.addEventListener('hashchange', handleRoute);
+  handleRoute();
+}
+
+async function handleRoute() {
+  const ticket = ++routeTicket;
+  let hash = location.hash || '#/dashboard';
+  if (!ROUTES[hash]) hash = isAuthenticated() ? '#/dashboard' : '#/login';
+
+  if (hash === '#/login') {
+    if (isAuthenticated()) { location.hash = '#/dashboard'; return; }
+    lookupsLoaded = false; // force a fresh getLookups() on the next login
+    renderLoginOnly();
+    return;
+  }
+
+  if (!requireAuth()) return;
+
+  if (!shellBuilt) buildShell();
+  document.getElementById('app-shell').classList.remove('is-hidden');
+  const loginRoot = document.getElementById('login-root');
+  if (loginRoot) loginRoot.remove();
+  updateUserChip();
+
+  if (!lookupsLoaded) {
+    // Highlight the clicked menu + title immediately, BEFORE the (possibly
+    // slow, first-visit-only) lookups load, so the click feels instant.
+    setActiveNav(hash);
+    document.getElementById('topbar-title').textContent = ROUTES[hash].label;
+    await loadLookups();
+    if (ticket !== routeTicket) return; // user already clicked elsewhere
+  }
+
+  setActiveNav(hash);
+  const route = ROUTES[hash];
+  document.getElementById('topbar-title').textContent = route.label;
+  await mountPage(route.page);
+}
+
+async function loadLookups() {
+  try {
+    // Instant UX (gas-instant-ux Prinsip 3 — cache master data, don't
+    // re-fetch it per page): getLookups() is fetched once per session
+    // already (lookupsLoaded guards every subsequent navigation), and this
+    // adds sessionStorage persistence on top so even a hard page reload
+    // paints instantly from cache while a fresh copy loads quietly behind
+    // it. 30 min TTL because master data (Owner/Pekerja/Jenis Produk/Jenis
+    // Pekerjaan/Jenis Tinta/Master Harga/Jenis Pengeluaran/Pengaturan/
+    // Periode) rarely changes — and any edit through Master Data or a
+    // period Close/Reopen calls refreshLookups() below to invalidate this
+    // immediately rather than waiting out the TTL.
+    await fetchSWR('getLookups', {}, (data) => {
+      setLookups(data || {});
+      renderPeriodSelect();
+    }, { ttlMs: 30 * 60 * 1000, global: true });
+    lookupsLoaded = true;
+  } catch (e) {
+    // fetchData already toasts; keep app usable, periods dropdown stays empty
+  }
+}
+
+// Exported for pages that mutate master data (Master Data CRUD, Rekap
+// Bulanan's Close/Reopen Periode) so the shared lookups cache/state update
+// immediately instead of waiting out the TTL above.
+export async function refreshLookups() {
+  invalidate('getLookups');
+  try {
+    return await fetchSWR('getLookups', {}, (fresh) => {
+      setLookups(fresh || {});
+      renderPeriodSelect();
+    }, { force: true, global: true });
+  } catch (e) {
+    return null;
+  }
+}
+
+async function mountPage(pageModule) {
+  const ticket = ++mountTicket;
+  bumpNavEpoch(); // any still-in-flight read from the previous page must not repaint
+  const view = document.getElementById('view');
+  if (currentPage && typeof currentPage.onLeave === 'function') {
+    try { currentPage.onLeave(); } catch (e) { /* ignore */ }
+  }
+  currentPage = pageModule;
+  // Each page renders into its OWN fresh wrapper. The previous page's wrapper
+  // is detached from the document, so any late DOM write from that page
+  // (timers, in-flight handlers) lands on a detached node — harmless — and can
+  // never hit elements that belong to the newly mounted page.
+  const root = document.createElement('div');
+  root.className = 'page-root';
+  view.replaceChildren(root);
+  try {
+    await pageModule.render(root);
+  } catch (err) {
+    if (ticket !== mountTicket) return; // superseded by a newer navigation — don't show its error here
+    console.error(err);
+    root.innerHTML = `<div class="card"><div class="notice notice-critical">${icon('alert')} Gagal memuat halaman: ${(err && err.message) || err}</div></div>`;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Prefetch (gas-instant-ux-pro): per menu item, the EXACT reads its page
+// issues on mount (same action + params => same cache key), so a prefetched
+// response is served by the page's own fetchSWR as a cache hit. Only pages
+// whose params can be derived without rendering them are listed. A path is
+// prefetched at most once per 20 s, silently (no error toast), and only when
+// the data isn't already fresh in cache (swr's 30 s freshness check).
+// ---------------------------------------------------------------------------
+const lastPrefetch = new Map();
+function prefetchSpecs(path) {
+  const period = getCurrentPeriod();
+  if (!period || !lookupsLoaded) return [];
+  const pid = period.id;
+  const ownerParams = () => ({ period_id: pid, owner_id: ownerIdByCode(getLookups(), getOwnerFilter()) });
+  switch (path) {
+    case '#/dashboard':
+    case '#/rekap-bulanan':
+      return [['getMonthlyRecap', { period_id: pid }], ['getPayrollDeductions', { period_id: pid }]];
+    case '#/jahit': return [['getSewingTransactions', ownerParams()]];
+    case '#/sablon': return [['getPrintingTransactions', ownerParams()]];
+    case '#/pengeluaran': {
+      const code = getOwnerFilter();
+      return [['getExpenses', { period_id: pid, owner_id: ownerIdByCode(getLookups(), EXPENSE_OWNERS.includes(code) ? code : undefined) }]];
+    }
+    case '#/gaji-jahit': return [['getSewingWorkerPayments', { period_id: pid, employee_id: '' }]];
+    case '#/gaji-sablon': return [['getPrintingWorkerPayments', { period_id: pid, employee_id: '' }]];
+    case '#/gaji-harian': return [['getDailyWorkerPayments', { period_id: pid, employee_id: '' }], ['getOvertime', { period_id: pid, employee_id: '' }]];
+    case '#/kasbon': return [['getPayrollDeductions', { period_id: pid, employee_id: '', jenis: '' }]];
+    default: return [];
+  }
+}
+
+function prefetchRoute(path) {
+  if (!isAuthenticated() || location.hash === path) return;
+  const now = Date.now();
+  if (now - (lastPrefetch.get(path) || 0) < 20000) return;
+  const specs = prefetchSpecs(path);
+  if (!specs.length) return;
+  lastPrefetch.set(path, now);
+  specs.forEach(([action, params]) => {
+    fetchSWR(action, params, null, { silent: true, ttlMs: 20000 }).catch(() => { /* background only */ });
+  });
+}
+
+async function refreshCurrentPage() {
+  if (currentPage) await mountPage(currentPage);
+}
+
+function setActiveNav(hash) {
+  document.querySelectorAll('.nav-item').forEach((btn) => {
+    btn.classList.toggle('is-active', btn.dataset.path === hash);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Shell (sidebar + topbar) — built once after first authenticated route.
+// ---------------------------------------------------------------------------
+function buildShell() {
+  const root = document.getElementById('shell-root');
+  root.innerHTML = `
+    <div id="app-shell">
+      <div class="sidebar-backdrop" id="sidebar-backdrop"></div>
+      <aside class="sidebar" id="sidebar">
+        <div class="sidebar__brand">
+          <div class="sidebar__brand-mark">BW</div>
+          <div class="sidebar__brand-text">Workshop Manager<small>PINGBRO · SUNRISE · BROTHERHOOD</small></div>
+        </div>
+        <nav class="sidebar__nav" id="sidebar-nav"></nav>
+        <div class="sidebar__footer">
+          <div class="user-chip">
+            <div class="user-chip__avatar" id="user-avatar">?</div>
+            <div class="user-chip__meta">
+              <div class="name" id="user-name">-</div>
+              <div class="role" id="user-role">-</div>
+            </div>
+            <button class="logout-btn" id="logout-btn" title="Keluar">${icon('logout')}</button>
+          </div>
+        </div>
+      </aside>
+      <div class="main-col">
+        <header class="topbar">
+          <button class="topbar__menu-btn" id="menu-btn" aria-label="Buka menu">${icon('menu')}</button>
+          <div class="topbar__title" id="topbar-title">Dashboard</div>
+          <div class="topbar__controls">
+            <select class="select-control" id="period-select" title="Periode"></select>
+            <div class="owner-filter-pills" id="owner-pills"></div>
+            <button class="theme-toggle" data-theme-toggle id="theme-btn" title="Ganti tema"></button>
+          </div>
+        </header>
+        <main class="view-container" id="view"></main>
+      </div>
+    </div>
+  `;
+
+  // Nav items
+  const navRoot = document.getElementById('sidebar-nav');
+  NAV.forEach((group) => {
+    const label = document.createElement('div');
+    label.className = 'nav-section-label';
+    label.textContent = group.group;
+    navRoot.appendChild(label);
+    group.items.forEach((item) => {
+      const btn = document.createElement('button');
+      btn.className = 'nav-item';
+      btn.dataset.path = item.path;
+      btn.innerHTML = `<span class="nav-item__icon">${icon(item.icon)}</span><span>${item.label}</span>`;
+      btn.addEventListener('click', () => {
+        location.hash = item.path;
+        closeSidebar();
+      });
+      // Intent-based prefetch: the moment the pointer is over / a finger touches
+      // a menu item, start loading that page's data so it is already on its way
+      // (or in cache) by the time the click lands. Never runs for items nobody
+      // reaches for, so there are no wasted requests.
+      btn.addEventListener('pointerenter', () => prefetchRoute(item.path));
+      btn.addEventListener('touchstart', () => prefetchRoute(item.path), { passive: true });
+      btn.addEventListener('focus', () => prefetchRoute(item.path));
+      navRoot.appendChild(btn);
+    });
+  });
+
+  // Owner pills
+  const pillsRoot = document.getElementById('owner-pills');
+  const pillDefs = [{ code: 'ALL', name: 'Semua' }, ...OWNERS];
+  pillsRoot.innerHTML = pillDefs.map((o) => `
+    <button class="owner-pill${o.code === getOwnerFilter() ? ' is-active' : ''}" data-owner="${o.code}">
+      ${o.code === 'ALL' ? '' : `<span class="owner-dot owner-dot--${o.code.toLowerCase()}"></span>`}${o.name}
+    </button>
+  `).join('');
+  pillsRoot.querySelectorAll('.owner-pill').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      setOwnerFilter(btn.dataset.owner);
+      pillsRoot.querySelectorAll('.owner-pill').forEach((b) => b.classList.toggle('is-active', b === btn));
+      refreshCurrentPage();
+    });
+  });
+
+  // Period select
+  document.getElementById('period-select').addEventListener('change', (e) => {
+    setCurrentPeriodId(e.target.value);
+    refreshCurrentPage();
+  });
+
+  // Theme
+  const themeBtn = document.getElementById('theme-btn');
+  themeBtn.innerHTML = currentTheme() === 'dark' ? '☀' : '\u{1F319}';
+  themeBtn.addEventListener('click', () => toggleTheme());
+
+  // Company logo (falls back to the "BW" text mark until/unless one is set)
+  updateBrandLogo();
+
+  // User chip
+  updateUserChip();
+  document.getElementById('logout-btn').addEventListener('click', async () => {
+    await logout();
+  });
+
+  // Mobile drawer
+  document.getElementById('menu-btn').addEventListener('click', openSidebar);
+  document.getElementById('sidebar-backdrop').addEventListener('click', closeSidebar);
+
+  shellBuilt = true;
+}
+
+// Instant UX: no dedicated fetch — reads the already-cached getLookups()
+// payload (see state.js getCompanyLogoUrl()). Re-runs whenever 'lookups'
+// changes (initial load, TTL refresh, or right after a logo upload via
+// Master Data → Pengaturan → Informasi Perusahaan), so the sidebar mark
+// updates immediately with no page reload.
+function updateBrandLogo() {
+  const mark = document.querySelector('.sidebar__brand-mark');
+  if (!mark) return;
+  const url = getCompanyLogoUrl();
+  mark.innerHTML = url ? `<img src="${url}" alt="Logo perusahaan" />` : 'BW';
+}
+
+function updateUserChip() {
+  const user = getUser();
+  const avatar = document.getElementById('user-avatar');
+  if (!avatar) return;
+  avatar.textContent = user ? (user.name || '?').trim().charAt(0).toUpperCase() : '?';
+  document.getElementById('user-name').textContent = (user && user.name) || 'User';
+  document.getElementById('user-role').textContent = (user && user.role) || '';
+}
+
+function openSidebar() {
+  document.getElementById('sidebar').classList.add('is-open');
+  document.getElementById('sidebar-backdrop').classList.add('is-open');
+}
+function closeSidebar() {
+  document.getElementById('sidebar')?.classList.remove('is-open');
+  document.getElementById('sidebar-backdrop')?.classList.remove('is-open');
+}
+
+function renderPeriodSelect() {
+  const sel = document.getElementById('period-select');
+  if (!sel) return;
+  const state = getState();
+  if (!state.periods.length) {
+    sel.innerHTML = '<option value="">Belum ada periode</option>';
+    return;
+  }
+  sel.innerHTML = state.periods
+    .slice()
+    .sort((a, b) => (a.year - b.year) || (a.month - b.month))
+    .reverse()
+    .map((p) => `<option value="${p.id}"${p.id === state.currentPeriodId ? ' selected' : ''}>${formatPeriodLabel(p)}${(p.status || '').toLowerCase() === 'closed' ? ' \u{1F512}' : ''}</option>`)
+    .join('');
+}
+
+// Fitur: Dashboard's new "Lihat Detail PINGBRO/SUNRISE" CTA (Dashboard.js)
+// calls setOwnerFilter() directly (not via the pill buttons below), so the
+// top-bar pills need to resync their own is-active class on every 'owner'
+// state change too — otherwise the pill row would still show the
+// PREVIOUSLY selected Owner after that CTA navigates to Rekap Bulanan.
+function syncOwnerPills() {
+  const pillsRoot = document.getElementById('owner-pills');
+  if (!pillsRoot) return;
+  const current = getOwnerFilter();
+  pillsRoot.querySelectorAll('.owner-pill').forEach((b) => b.classList.toggle('is-active', b.dataset.owner === current));
+}
+
+onStateChange((key) => {
+  if (key === 'periods' || key === 'lookups') renderPeriodSelect();
+  if (key === 'lookups') updateBrandLogo();
+  if (key === 'owner') syncOwnerPills();
+});
+
+// ---------------------------------------------------------------------------
+// Login-only render (no shell)
+// ---------------------------------------------------------------------------
+async function renderLoginOnly() {
+  document.getElementById('app-shell')?.classList.add('is-hidden');
+  let root = document.getElementById('login-root');
+  if (!root) {
+    root = document.createElement('div');
+    root.id = 'login-root';
+    document.getElementById('shell-root').appendChild(root);
+  }
+  root.innerHTML = '';
+  await LoginPage.render(root);
+}
+
+export function navigateTo(path) {
+  location.hash = path;
+}
+
+export { fetchData as _fetchDataForPages };
