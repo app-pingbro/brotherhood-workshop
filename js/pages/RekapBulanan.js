@@ -1,8 +1,15 @@
 // ============================================================================
-// Rekap Bulanan — consolidated matrix (metric rows x PINGBRO/SUNRISE/
-// BROTHERHOOD/Biaya Bersama/Gabungan columns), the 3-box saldo
-// reconciliation, a Koreksi Saldo Awal form (correctSaldoAwal), and period
-// Close/Reopen controls (reopen requires a reason, per PRD audit rule).
+// Rekap Bulanan — ringkasan KPI (Omzet Jahit/Sablon, Total Pemasukan, Total
+// Pengeluaran, Hasil Bersih, Saldo Akhir), perhitungan saldo (Saldo Awal
+// Otomatis + Koreksi Manual = Saldo Awal Final -> Saldo Akhir), tabel
+// Piutang & Pembayaran Owner, matriks "Rincian Perhitungan", penjelasan rumus
+// dan kontrol Tutup/Buka Kembali periode (reopen wajib beralasan, sesuai
+// aturan audit PRD).
+//
+// Form "Koreksi Saldo Awal" SENGAJA tidak ada lagi di halaman ini (UI saja);
+// aksi backend correctSaldoAwal dan nilai koreksi yang sudah tersimpan tetap
+// ada & tetap dihitung ke Saldo Awal Final (ditampilkan sebagai "Koreksi
+// Manual"). Tidak ada rumus yang berubah di file ini.
 //
 // Matrix is built client-side from the ACTUAL backend response shape
 // (verified against backend/Rekap.gs, not guessed): recap.perOwner is an
@@ -18,7 +25,7 @@ import { fetchSWR, invalidate, invalidatePrefix } from '../cache.js';
 import { buildForm } from './_shared.js';
 import { formatCurrency, escapeHtml, skeletonKpis, skeletonTable, toast, openModal, closeModal, confirmDialog, pick, formatPeriodLabel } from '../ui.js';
 import { icon } from '../icons.js';
-import { getCurrentPeriod, setPeriods } from '../state.js';
+import { getCurrentPeriod, getState, setPeriods } from '../state.js';
 
 const COLUMNS = [
   { key: 'PINGBRO', label: 'Pingbro' },
@@ -28,24 +35,60 @@ const COLUMNS = [
   { key: 'GABUNGAN', label: 'Gabungan' }
 ];
 
+// Rupiah dengan tanda minus di depan ("-Rp1.561.000"), konsisten dengan tabel.
+function money(n) {
+  const v = Math.round(Number(n) || 0);
+  return (v < 0 ? '-' : '') + 'Rp' + Math.abs(v).toLocaleString('id-ID');
+}
+const pctText = (p) => `${p.toFixed(1).replace('.', ',')}%`;
+
+// "01 – 30 September 2026", dari bulan/tahun periode saja.
+function periodRange(period) {
+  const m = Number(period.month), y = Number(period.year);
+  if (!(m >= 1 && m <= 12) || !y) return '';
+  const last = new Date(y, m, 0).getDate();
+  const monthName = formatPeriodLabel(period).replace(/\s+\d{4}$/, '');
+  return `01 – ${String(last).padStart(2, '0')} ${monthName} ${y}`;
+}
+
+// Periode tepat satu bulan sebelum `period` (jika ada) — hanya untuk
+// perbandingan "dari bulan lalu"; tidak mempengaruhi angka apa pun.
+function previousPeriod(period) {
+  const periods = (getState().periods) || [];
+  const key = Number(period.year) * 12 + Number(period.month);
+  return periods.find((p) => Number(p.year) * 12 + Number(p.month) === key - 1) || null;
+}
+
 export async function render(container) {
   const period = getCurrentPeriod();
   container.innerHTML = `
-    <div class="page-header">
-      <div style="display:flex; align-items:center; gap:12px;">
-        <div class="page-icon">${icon('dashboard', 20)}</div>
-        <div><h1>Rekap Bulanan</h1><div class="subtitle">${period ? escapeHtml(formatPeriodLabel(period)) : 'Pilih periode di kanan atas'}</div></div>
+    <div class="page-header rk-header">
+      <div class="rk-title">
+        <div class="page-icon">${icon('chart', 20)}</div>
+        <div><h1>Rekap Bulanan</h1><div class="subtitle">${period ? 'Ringkasan keuangan workshop untuk periode ' + escapeHtml(formatPeriodLabel(period)) : 'Pilih periode di kanan atas'}</div></div>
       </div>
-      <div class="page-header__actions" id="period-actions"></div>
+      <div class="page-header__actions rk-actions" id="period-actions"></div>
     </div>
-    <div id="ringkasan-section" class="mt-16">${skeletonKpis(5)}</div>
+    <div id="rk-status"></div>
+    <div id="ringkasan-section" class="dash-section">${skeletonKpis(4)}</div>
+    <div id="result-section" class="dash-section mt-16"></div>
     <div id="saldo-section" class="mt-16">${skeletonKpis(3)}</div>
-    <div class="card mt-16">
-      <h3 style="display:flex; align-items:center; gap:8px;">${icon('list', 18)} Rincian Perhitungan</h3>
+    <div id="owner-section"></div>
+    <div class="card mt-16 rk-matrix-card">
+      <div class="rk-card-head">
+        <span class="rk-card-icon">${icon('list', 18)}</span>
+        <div><h3>Rincian Perhitungan</h3><small>Per Owner, Biaya Bersama, dan Gabungan</small></div>
+      </div>
+      <div class="rk-legend" aria-label="Keterangan warna">
+        <span><i style="background:var(--status-success-fg)"></i>Pemasukan</span>
+        <span><i style="background:var(--status-info-fg)"></i>Gaji &amp; Lembur</span>
+        <span><i style="background:var(--status-critical-fg)"></i>Potongan (Kasbon, dll)</span>
+        <span><i style="background:var(--status-warning-fg)"></i>Pengeluaran</span>
+        <span><i style="background:var(--status-highlight-fg)"></i>Hasil Bulan</span>
+      </div>
       <div id="matrix-section" class="mt-12">${skeletonTable(7, 7)}</div>
     </div>
     <div class="card mt-16" id="formula-section"></div>
-    <div class="card mt-16" id="koreksi-section"></div>
   `;
 
   // Kartu formula bersifat statis (tidak tergantung data recap) — dirender
@@ -56,38 +99,43 @@ export async function render(container) {
     document.getElementById('ringkasan-section').innerHTML = '';
     document.getElementById('saldo-section').innerHTML = '<div class="notice notice-info">Pilih periode terlebih dahulu.</div>';
     document.getElementById('matrix-section').innerHTML = '';
-    document.getElementById('koreksi-section').innerHTML = '';
     return;
   }
 
   renderPeriodActions(period);
-  // Independent of recap data (only needs `period`) — render it right away
-  // rather than waiting on the recap fetch, and keep it OUT of the recap's
-  // stale-while-revalidate callback below so a background refresh never
-  // clobbers input the user is mid-typing into this form.
-  renderKoreksiForm(period);
+  renderStatusNote(period);
 
-  // Instant UX (gas-instant-ux Prinsip 2/4): paint the saldo boxes + matrix
-  // from cache immediately if this period was already viewed this session,
-  // then quietly refresh from the server.
+  // Instant UX (gas-instant-ux Prinsip 2/4): paint everything from cache
+  // immediately if this period was already viewed this session, then quietly
+  // refresh from the server.
   //
   // Feature F #1 (Total Kasbon/Potongan di Rincian Gaji & Lembur): the
   // matrix also needs PAYROLL_DEDUCTIONS for this period (same action/params
   // Kasbon.js already uses — getPayrollDeductions({period_id}) returns ALL
   // employees' rows for the period, no new backend action needed). Fetched
   // independently of getMonthlyRecap (own try/catch) so a hiccup fetching
-  // deductions never blocks the core recap/saldo from rendering — worst
-  // case Total Kasbon/Potongan just show 0 until it loads/retries.
+  // deductions never blocks the core recap/saldo from rendering.
+  //
+  // Perbandingan "dari bulan lalu" memakai getMonthlyRecap periode sebelumnya
+  // (aksi yang sama, hanya dibaca) — juga independen & non-fatal.
   let painted = false;
   let latestRecap = null;
   let latestDeductions = [];
+  let prevRecap = null;
+  const prev = previousPeriod(period);
+  const repaintKpis = () => {
+    if (!latestRecap) return;
+    renderRingkasan(latestRecap, prevRecap, prev);
+    renderResult(latestRecap);
+  };
   const repaintMatrix = () => { if (latestRecap) renderMatrix(latestRecap, latestDeductions); };
 
   const recapPromise = fetchSWR('getMonthlyRecap', { period_id: period.id }, (recap) => {
     painted = true;
     latestRecap = recap;
-    renderRingkasan(recap);
-    renderSaldo(recap, period);
+    repaintKpis();
+    renderSaldo(recap);
+    renderOwnerLedger(recap);
     repaintMatrix();
   }).catch(() => {
     if (!painted) {
@@ -102,13 +150,20 @@ export async function render(container) {
     repaintMatrix();
   }).catch(() => { /* non-fatal — lihat komentar di atas */ });
 
-  await Promise.all([recapPromise, deductionsPromise]);
+  const prevPromise = prev
+    ? fetchSWR('getMonthlyRecap', { period_id: prev.id }, (r) => { prevRecap = r; repaintKpis(); }).catch(() => { /* non-fatal */ })
+    : Promise.resolve();
+
+  await Promise.all([recapPromise, deductionsPromise, prevPromise]);
 }
 
 function renderPeriodActions(period) {
   const root = document.getElementById('period-actions');
   const isClosed = String(period.status || '').toLowerCase() === 'closed';
-  root.innerHTML = '';
+  root.innerHTML = `<div class="period-chip ${isClosed ? 'period-chip--closed' : ''}">
+    <span class="period-chip__dot"></span>
+    <div><strong>${isClosed ? 'Periode Ditutup' : 'Periode Berjalan'}</strong><small>${escapeHtml(periodRange(period))}</small></div>
+  </div>`;
   const btn = document.createElement('button');
   if (isClosed) {
     btn.className = 'btn btn-secondary';
@@ -120,6 +175,18 @@ function renderPeriodActions(period) {
     btn.addEventListener('click', () => closePeriodFlow(period));
   }
   root.appendChild(btn);
+}
+
+// Keterangan status periode — satu kalimat singkat, sesuai perilaku sistem
+// (tutup periode = transaksi terkunci + snapshot Slip Gaji; buka kembali
+// wajib alasan dan tercatat di Audit Log).
+function renderStatusNote(period) {
+  const root = document.getElementById('rk-status');
+  if (!root) return;
+  const isClosed = String(period.status || '').toLowerCase() === 'closed';
+  root.innerHTML = isClosed
+    ? `<div class="rk-status rk-status--closed">${icon('lock', 17)}<span><strong>Periode sudah ditutup.</strong> Transaksi terkunci dan Slip Gaji memakai snapshot. Gunakan &ldquo;Buka Kembali Periode&rdquo; (wajib beralasan) jika data perlu diubah.</span></div>`
+    : `<div class="rk-status rk-status--open">${icon('info', 17)}<span><strong>Periode masih berjalan.</strong> Angka di bawah mengikuti transaksi terbaru. Tutup periode setelah semua data final agar Slip Gaji dibekukan.</span></div>`;
 }
 
 async function closePeriodFlow(period) {
@@ -177,64 +244,92 @@ async function refreshPeriodsAndRerender() {
   render(document.getElementById('view'));
 }
 
-function renderSaldo(recap, period) {
-  const root = document.getElementById('saldo-section');
-  const saldoAwalOtomatis = pick(recap, ['saldoAwalOtomatis', 'saldo_awal_otomatis']);
-  const saldoAwalKoreksi = pick(recap, ['saldoAwalKoreksi', 'saldo_awal_koreksi']);
+// Nilai-nilai saldo dibaca persis seperti sebelumnya (tanpa rumus baru).
+function saldoValues(recap) {
+  const saldoAwalOtomatis = Number(pick(recap, ['saldoAwalOtomatis', 'saldo_awal_otomatis'])) || 0;
+  const saldoAwalKoreksi = Number(pick(recap, ['saldoAwalKoreksi', 'saldo_awal_koreksi'])) || 0;
   // Saldo Awal (input) — saldo kas sebelum aplikasi dipakai (Master Data >
   // Saldo & Piutang Awal). 0 (dan kotaknya tidak tampil) sampai ada yang diinput.
   const saldoAwalInput = Number(recap.saldoAwalAwal) || 0;
-  const saldoAwalFinal = pick(recap, ['saldoAwalFinal', 'saldo_awal_final'], saldoAwalOtomatis + saldoAwalKoreksi + saldoAwalInput);
-  const hasilBulan = pick(recap, ['hasilBulan', 'hasil_bulan']);
+  const saldoAwalFinal = Number(pick(recap, ['saldoAwalFinal', 'saldo_awal_final'], saldoAwalOtomatis + saldoAwalKoreksi + saldoAwalInput)) || 0;
+  const hasilBulan = Number(pick(recap, ['hasilBulan', 'hasil_bulan'])) || 0;
   // Bayar / Terima Owner (Dashboard) — perpindahan kas, BUKAN Pengeluaran/Pemasukan,
   // jadi tidak ikut Hasil Bulan; hanya menggeser Saldo Akhir. 0 sampai dipakai.
   const bayarOwner = Number(recap.pembayaranOwner) || 0;
   const terimaOwner = Number(recap.penerimaanOwner) || 0;
-  const saldoAkhir = pick(recap, ['saldoAkhir', 'saldo_akhir'], saldoAwalFinal + hasilBulan - bayarOwner + terimaOwner);
+  const saldoAkhir = Number(pick(recap, ['saldoAkhir', 'saldo_akhir'], saldoAwalFinal + hasilBulan - bayarOwner + terimaOwner)) || 0;
+  return { saldoAwalOtomatis, saldoAwalKoreksi, saldoAwalInput, saldoAwalFinal, hasilBulan, bayarOwner, terimaOwner, saldoAkhir };
+}
+
+// Kartu "Perhitungan Saldo": dua persamaan berurutan —
+//   Saldo Awal Final = Saldo Awal Otomatis + Koreksi Manual (+ Saldo Awal Input)
+//   Saldo Akhir      = Saldo Awal Final + Hasil Bulan (− Bayar Owner + Terima Owner)
+function renderSaldo(recap) {
+  const root = document.getElementById('saldo-section');
+  if (!root) return;
+  const v = saldoValues(recap);
+  const box = (label, value, hint, mod = '') => `
+    <div class="rk-eq__box ${mod}"><div class="rk-eq__label">${label}</div><div class="rk-eq__value${value < 0 ? ' is-neg' : ''}">${money(value)}</div>${hint ? `<div class="rk-eq__hint">${hint}</div>` : ''}</div>`;
+  const op = (sym) => `<div class="rk-eq__op" aria-hidden="true">${sym}</div>`;
 
   root.innerHTML = `
-    <div class="saldo-boxes">
-      <div class="saldo-box"><div class="label">Saldo Awal Otomatis</div><div class="value">${formatCurrency(saldoAwalOtomatis)}</div><div class="hint">= Saldo Akhir bulan lalu</div></div>
-      <div class="saldo-op">+</div>
-      <div class="saldo-box"><div class="label">Koreksi Manual</div><div class="value">${formatCurrency(saldoAwalKoreksi)}</div><div class="hint">tersimpan terpisah</div></div>
-      ${saldoAwalInput !== 0 ? `
-      <div class="saldo-op">+</div>
-      <div class="saldo-box"><div class="label">Saldo Awal (Input)</div><div class="value">${formatCurrency(saldoAwalInput)}</div><div class="hint">sebelum aplikasi dipakai</div></div>` : ''}
-      <div class="saldo-op">=</div>
-      <div class="saldo-box"><div class="label">Saldo Awal Final</div><div class="value">${formatCurrency(saldoAwalFinal)}</div></div>
-    </div>
-    <div class="grid grid-kpi mt-16">
-      <div class="card kpi-card"><div class="label">Hasil Bulan</div><div class="value">${formatCurrency(hasilBulan)}</div></div>
-      ${bayarOwner !== 0 ? `<div class="card kpi-card"><div class="label">Pembayaran ke Owner (−)</div><div class="value">${formatCurrency(bayarOwner)}</div><div class="hint text-low" style="font-size:12px">Bayar di Dashboard — mengurangi Saldo, bukan Pengeluaran</div></div>` : ''}
-      ${terimaOwner !== 0 ? `<div class="card kpi-card"><div class="label">Penerimaan dari Owner (+)</div><div class="value">${formatCurrency(terimaOwner)}</div><div class="hint text-low" style="font-size:12px">Terima di Dashboard — menambah Saldo, bukan Pemasukan</div></div>` : ''}
-      <div class="card kpi-card kpi-card--accent"><div class="label">Saldo Akhir</div><div class="value">${formatCurrency(saldoAkhir)}</div></div>
-      <div class="card kpi-card"><div class="label">Status Periode</div><div class="value" style="font-size:16px">${String(period.status || '-').toUpperCase()}</div></div>
-    </div>
-    ${ownerLedgerTableHtml(recap)}
-  `;
+    <div class="card rk-saldo">
+      <div class="rk-card-head">
+        <span class="rk-card-icon">${icon('wallet', 18)}</span>
+        <div><h3>Perhitungan Saldo</h3><small>Dari saldo awal sampai saldo akhir periode ini</small></div>
+      </div>
+
+      <div class="rk-eqtitle">Saldo Awal</div>
+      <div class="rk-eq">
+        ${box('Saldo Awal Otomatis', v.saldoAwalOtomatis, '= Saldo Akhir bulan lalu')}
+        ${op('+')}
+        ${box('Koreksi Manual', v.saldoAwalKoreksi, 'dari koreksi tersimpan')}
+        ${v.saldoAwalInput !== 0 ? `${op('+')}${box('Saldo Awal (Input)', v.saldoAwalInput, 'sebelum aplikasi dipakai')}` : ''}
+        ${op('=')}
+        ${box('Saldo Awal Final', v.saldoAwalFinal, 'dipakai periode ini', 'rk-eq__box--result')}
+      </div>
+
+      <div class="rk-eqtitle">Saldo Akhir</div>
+      <div class="rk-eq">
+        ${box('Saldo Awal Final', v.saldoAwalFinal, '')}
+        ${op('+')}
+        ${box('Hasil Bulan', v.hasilBulan, 'Pemasukan − Biaya')}
+        ${v.bayarOwner !== 0 ? `${op('−')}${box('Pembayaran ke Owner', v.bayarOwner, 'Bayar di Dashboard; bukan Pengeluaran')}` : ''}
+        ${v.terimaOwner !== 0 ? `${op('+')}${box('Penerimaan dari Owner', v.terimaOwner, 'Terima di Dashboard; bukan Pemasukan')}` : ''}
+        ${op('=')}
+        ${box('Saldo Akhir', v.saldoAkhir, 'saldo kas akhir periode', 'rk-eq__box--result')}
+      </div>
+    </div>`;
 }
 
 // Piutang & pembayaran PINGBRO/SUNRISE — only shown once at least one of them
 // has a Piutang Awal or a Pembayaran (backend flag ledger_aktif), so Rekap
 // looks exactly as before for anyone not using Bayar / Piutang Awal.
-function ownerLedgerTableHtml(recap) {
+function renderOwnerLedger(recap) {
+  const root = document.getElementById('owner-section');
+  if (!root) return;
   const rows = Object.values(recap.perOwner || {}).filter((o) => o.ledger_aktif);
-  if (!rows.length) return '';
-  return `
-    <div class="card mt-16">
-      <h3 class="mb-8">Piutang &amp; Pembayaran Owner</h3>
-      <div class="table-wrap"><table class="data-table">
+  if (!rows.length) { root.innerHTML = ''; return; }
+  const dot = (code) => `<i class="rk-dot rk-dot--${escapeHtml(String(code || '').toLowerCase())}"></i>`;
+  root.innerHTML = `
+    <div class="card mt-16 rk-owner-card">
+      <div class="rk-card-head">
+        <span class="rk-card-icon">${icon('coins', 18)}</span>
+        <div><h3>Piutang &amp; Pembayaran Owner</h3><small>Tagihan periode, pembayaran, dan sisa yang harus dibayar</small></div>
+      </div>
+      <div class="table-wrap"><table class="data-table rk-table">
         <thead><tr><th>Owner</th><th class="num">Tagihan Periode</th><th class="num">Sisa Periode Lalu</th><th class="num">Piutang Awal</th><th class="num">Sudah Dibayar</th><th class="num">Sudah Diterima</th><th class="num">Total Harus Dibayar</th></tr></thead>
         <tbody>${rows.map((o) => `<tr>
-          <td>${escapeHtml(o.owner_name)}</td>
+          <td class="rk-owner">${dot(o.owner_code)}${escapeHtml(o.owner_name)}</td>
           <td class="num">${formatCurrency(o.tagihan)}</td>
-          <td class="num">${formatCurrency(o.sisa_sebelumnya)}</td>
-          <td class="num">${formatCurrency(o.piutang_awal)}</td>
-          <td class="num">${formatCurrency(o.dibayar)}</td>
-          <td class="num">${formatCurrency(o.diterima || 0)}</td>
-          <td class="num"><strong>${formatCurrency(o.total_harus_dibayar)}</strong></td>
+          <td class="num c-warn">${formatCurrency(o.sisa_sebelumnya)}</td>
+          <td class="num c-warn">${formatCurrency(o.piutang_awal)}</td>
+          <td class="num c-ok">${formatCurrency(o.dibayar)}</td>
+          <td class="num c-info">${formatCurrency(o.diterima || 0)}</td>
+          <td class="num c-total"><strong>${formatCurrency(o.total_harus_dibayar)}</strong></td>
         </tr>`).join('')}</tbody>
       </table></div>
+      <p class="rk-note">Total Harus Dibayar = Tagihan Periode + Sisa Periode Lalu + Piutang Awal &minus; Sudah Dibayar + Sudah Diterima.</p>
     </div>`;
 }
 
@@ -255,54 +350,100 @@ function computeTotals(recap) {
   return { P, S, B, gaji, gajiTotal, pengeluaran, omzetJahit, omzetSablon };
 }
 
-// Feature F #3 (perbaikan tampilan, referensi mockup dari user): 5 kartu
-// ringkasan berwarna di atas tabel rinci — Omzet Jahit/Sablon, Total
-// Pemasukan, Total Pengeluaran, Hasil Bersih. Semua nilai diambil dari
-// computeTotals()/recap langsung (tidak ada angka baru/dummy).
-function renderRingkasan(recap) {
+// Perbandingan dengan bulan lalu: persentase dihitung dari recap periode
+// sebelumnya (aksi yang sama). `goodWhenUp`: naik = baik (hijau) atau buruk (merah).
+function trendMeta(cur, prevRecap, prevValue, goodWhenUp) {
+  if (!prevRecap) return '<div class="kh-sub">Belum ada data bulan lalu</div>';
+  const prev = Number(prevValue) || 0;
+  const sub = `<div class="kh-sub">Bulan lalu ${money(prev)}</div>`;
+  if (prev <= 0) return sub;
+  const p = ((cur - prev) / prev) * 100;
+  if (Math.abs(p) < 0.05) return `<span class="kh-chip kh-chip--flat">Sama dengan bulan lalu</span>${sub}`;
+  const good = (p >= 0) === goodWhenUp;
+  return `<span class="kh-chip kh-chip--${good ? 'up' : 'down'}">${p >= 0 ? '↑' : '↓'} ${pctText(Math.abs(p))} dari bulan lalu</span>${sub}`;
+}
+
+function heroCard(tone, iconName, label, value, meta, valueColor = '') {
+  return `
+    <article class="kpi-hero ${tone}">
+      <div class="kpi-hero__top">
+        <span class="kpi-hero__icon">${icon(iconName, 22)}</span>
+        <div class="kpi-hero__label">${escapeHtml(label)}</div>
+      </div>
+      <div class="kpi-hero__value" ${valueColor ? `style="color:${valueColor}"` : ''}>${money(value)}</div>
+      <div class="kpi-hero__meta">${meta}</div>
+    </article>`;
+}
+
+// 4 kartu utama: Omzet Jahit, Omzet Sablon, Total Pemasukan, Total Pengeluaran.
+// Semua nilai diambil dari computeTotals()/recap langsung (tidak ada angka baru).
+function renderRingkasan(recap, prevRecap, prev) {
   const root = document.getElementById('ringkasan-section');
   if (!root) return;
   if (!recap) { root.innerHTML = ''; return; }
   const t = computeTotals(recap);
-  const cards = [
-    { label: 'Omzet Jahit', value: t.omzetJahit, iconName: 'scissors', tone: 'success' },
-    { label: 'Omzet Sablon', value: t.omzetSablon, iconName: 'droplet', tone: 'success' },
-    { label: 'Total Pemasukan', value: recap.totalPemasukan, iconName: 'wallet', tone: 'info' },
-    { label: 'Total Pengeluaran', value: recap.totalBiaya, iconName: 'receipt', tone: 'critical' },
-    { label: 'Hasil Bersih', value: recap.hasilBulan, iconName: 'target', tone: 'highlight' }
-  ];
-  root.innerHTML = `<div class="grid grid-kpi">${cards.map((c) => `
-    <div class="card ringkasan-card ringkasan-card--${c.tone}">
-      <div class="stat-icon stat-icon--${c.tone}">${icon(c.iconName, 18)}</div>
-      <div><div class="label">${escapeHtml(c.label)}</div><div class="value">${formatCurrency(c.value)}</div></div>
-    </div>`).join('')}</div>`;
+  const pt = prevRecap ? computeTotals(prevRecap) : null;
+  const pemasukan = Number(recap.totalPemasukan) || 0;
+  const biaya = Number(recap.totalBiaya) || 0;
+  const pctOfOmzet = pemasukan > 0 ? (biaya / pemasukan) * 100 : null;
+  root.innerHTML = `<div class="kpi-hero-grid">
+    ${heroCard('', 'scissors', 'Omzet Jahit', t.omzetJahit, trendMeta(t.omzetJahit, prevRecap, pt && pt.omzetJahit, true))}
+    ${heroCard('kpi-hero--omzet', 'droplet', 'Omzet Sablon', t.omzetSablon, trendMeta(t.omzetSablon, prevRecap, pt && pt.omzetSablon, true))}
+    ${heroCard('kpi-hero--hasil', 'wallet', 'Total Pemasukan', pemasukan, trendMeta(pemasukan, prevRecap, prevRecap && prevRecap.totalPemasukan, true))}
+    ${heroCard('kpi-hero--keluar', 'receipt', 'Total Pengeluaran', biaya, trendMeta(biaya, prevRecap, prevRecap && prevRecap.totalBiaya, false) + (pctOfOmzet !== null ? `<div class="kh-sub">${pctOfOmzet.toFixed(0)}% dari Total Pemasukan</div>` : ''))}
+  </div>`;
 }
 
-// Kartu "Formula Perhitungan" statis di bawah tabel — teks disesuaikan
-// dengan rumus yang BENAR-BENAR berjalan di sistem saat ini (Total Biaya =
-// Pengeluaran PINGBRO+SUNRISE, dikonfirmasi bersama user sebelumnya), bukan
-// rumus lama "Rekap = (Rekap Bulanan + Omzet Sablon) - (Pengeluaran - Gaji...)"
-// yang sempat dipakai di draft awal — menampilkan rumus yang tidak sesuai
-// angka yang sebenarnya dihitung justru akan membingungkan, bukan membantu.
+// Baris kedua: Hasil Bersih dan Saldo Akhir.
+function renderResult(recap) {
+  const root = document.getElementById('result-section');
+  if (!root) return;
+  if (!recap) { root.innerHTML = ''; return; }
+  const v = saldoValues(recap);
+  const pemasukan = Number(recap.totalPemasukan) || 0;
+  const biaya = Number(recap.totalBiaya) || 0;
+  const hasil = Number(pick(recap, ['hasilBulan', 'hasil_bulan'], pemasukan - biaya)) || 0;
+  const surplus = hasil >= 0;
+  let hasilNote;
+  if (surplus) hasilNote = pemasukan > 0 && hasil > 0 ? `Pemasukan melebihi pengeluaran sebesar ${(hasil / pemasukan * 100).toFixed(0)}%` : 'Pemasukan sama dengan pengeluaran';
+  else hasilNote = pemasukan > 0 ? `Pengeluaran melebihi pemasukan sebesar ${(-hasil / pemasukan * 100).toFixed(0)}%` : 'Pengeluaran melebihi pemasukan';
+  const delta = v.saldoAkhir - v.saldoAwalFinal;
+  const deltaChip = Math.abs(delta) < 0.5
+    ? '<span class="kh-chip kh-chip--flat">Tidak berubah dari awal periode</span>'
+    : `<span class="kh-chip kh-chip--${delta > 0 ? 'up' : 'down'}">${delta > 0 ? '↑' : '↓'} ${money(Math.abs(delta))} dari awal periode</span>`;
+  root.innerHTML = `<div class="rk-pair">
+    ${heroCard(surplus ? '' : 'kpi-hero--keluar', 'chart', 'Hasil Bersih', hasil,
+      `<span class="kh-chip kh-chip--${surplus ? 'up' : 'down'}">${surplus ? '↑ Surplus' : '↓ Defisit'}</span><div class="kh-sub">${hasilNote}</div>`,
+      surplus ? 'var(--status-success-fg)' : 'var(--status-critical-fg)')}
+    ${heroCard('kpi-hero--omzet', 'wallet', 'Saldo Akhir', v.saldoAkhir,
+      `${deltaChip}<div class="kh-sub">Saldo awal final ${money(v.saldoAwalFinal)}</div>`,
+      v.saldoAkhir < 0 ? 'var(--status-critical-fg)' : '')}
+  </div>`;
+}
+
+// Kartu "Cara Membaca Rekap" statis — teks sesuai rumus yang BENAR-BENAR
+// berjalan di sistem (Total Biaya = Pengeluaran PINGBRO+SUNRISE, dikonfirmasi
+// bersama user sebelumnya).
 function renderFormulaCard() {
   const root = document.getElementById('formula-section');
   if (!root) return;
   root.innerHTML = `
-    <div class="formula-card">
-      <div class="formula-card__icon">${icon('info', 18)}</div>
-      <div class="formula-card__body">
-        <strong>Formula Perhitungan:</strong>
-        <div class="formula-card__formula">
-          Hasil Bulan = Total Pemasukan &minus; Total Biaya<br>
-          Total Biaya = Pengeluaran PINGBRO + Pengeluaran SUNRISE
-        </div>
-      </div>
-      <ul class="formula-card__notes">
-        <li>Semua Gaji &amp; Lembur sudah tercatat di Pengeluaran (dibayar oleh Owner PINGBRO/SUNRISE), sehingga tidak dihitung dua kali di Total Biaya.</li>
-        <li>Kasbon &amp; Potongan adalah potongan Slip Gaji pekerja, bukan biaya Owner &mdash; "Total Bersih" di Rincian Gaji &amp; Lembur murni informasi dan tidak memengaruhi Total Biaya/Hasil Bulan.</li>
-        <li>Semua angka mengikuti Owner dan periode yang sedang dipilih.</li>
-      </ul>
-    </div>`;
+    <div class="rk-card-head">
+      <span class="rk-card-icon">${icon('info', 18)}</span>
+      <div><h3>Rumus Perhitungan</h3><small>Cara angka di halaman ini dihitung</small></div>
+    </div>
+    <div class="rk-formulas">
+      <div class="rk-formula"><b>Hasil Bulan</b> = Total Pemasukan &minus; Total Biaya</div>
+      <div class="rk-formula"><b>Total Biaya</b> = Pengeluaran PINGBRO + Pengeluaran SUNRISE</div>
+      <div class="rk-formula"><b>Saldo Awal Final</b> = Saldo Awal Otomatis + Koreksi Manual (+ Saldo Awal Input)</div>
+      <div class="rk-formula"><b>Saldo Akhir</b> = Saldo Awal Final + Hasil Bulan &minus; Pembayaran Owner + Penerimaan Owner</div>
+    </div>
+    <ul class="rk-notes">
+      <li>Gaji &amp; Lembur sudah tercatat di Pengeluaran (dibayar Owner PINGBRO/SUNRISE), jadi tidak dihitung dua kali di Total Biaya.</li>
+      <li>Kasbon &amp; Potongan memotong Slip Gaji pekerja, bukan biaya Owner &mdash; &ldquo;Total Bersih&rdquo; di rincian hanya informasi.</li>
+      <li>Bayar/Terima Owner hanya menggeser Saldo Akhir, bukan Pengeluaran atau Pemasukan.</li>
+      <li>Semua angka mengikuti periode yang dipilih di kanan atas.</li>
+    </ul>`;
 }
 
 function buildMatrixRows(recap, deductions) {
@@ -359,6 +500,7 @@ function buildMatrixRows(recap, deductions) {
   });
 
   return [
+    sectionRow('Pemasukan'),
     row('Omzet Jahit', { pingbro: P.jahit, sunrise: S.jahit, brotherhood: B.jahit, gabungan: omzetJahit }),
     row('Omzet Sablon', { pingbro: P.sablon, sunrise: S.sablon, brotherhood: B.sablon, gabungan: omzetSablon }),
     row('Total Pemasukan', { pingbro: P.pemasukan, sunrise: S.pemasukan, brotherhood: B.pemasukan, gabungan: recap.totalPemasukan, emphasize: true, tone: 'success' }),
@@ -385,6 +527,7 @@ function buildMatrixRows(recap, deductions) {
     // tampilan user juga tidak punya baris terpisah untuk ini). Nilai
     // Gabungan di sini diambil LANGSUNG dari recap.totalBiaya (bukan
     // dihitung ulang secara lokal) supaya selalu 100% sama dengan sumbernya.
+    sectionRow('Pengeluaran & Hasil Bulan'),
     row('Pengeluaran (= Total Biaya)', { pingbro: pengeluaran.pingbro, sunrise: pengeluaran.sunrise, brotherhood: null, gabungan: recap.totalBiaya, emphasize: true, tone: 'warning' }),
     finalRow('Hasil Bulan', { gabungan: recap.hasilBulan, tone: 'highlight' })
   ];
@@ -425,26 +568,5 @@ function renderMatrix(recap, deductions) {
     }).join('')}
     </tbody>
   </table></div>
-  <p class="subtitle mt-8">Gaji &amp; Lembur dibayar dari tenaga kerja bersama (shared labor pool) sehingga tidak dapat diatribusikan ke satu Owner — selalu tampil di kolom Biaya Bersama sebagai rincian informasi. Gaji &amp; Lembur sudah tercatat sebagai baris Pengeluaran (dibayar oleh Owner PINGBRO/SUNRISE) sehingga <strong>tidak dijumlahkan lagi</strong> ke "Total Biaya" — Pengeluaran = Total Biaya, agar tidak dihitung dua kali. Kasbon &amp; Potongan (dari halaman Kasbon &amp; Potongan) adalah potongan Slip Gaji pekerja, bukan biaya Owner — "Total Bersih" di rincian ini hanya informasi gaji-setelah-potongan per pekerja secara agregat, dan tidak memengaruhi Total Biaya/Hasil Bulan di bawah. Pengeluaran hanya berlaku untuk PINGBRO &amp; SUNRISE (BROTHERHOOD tidak menanggung Pengeluaran operasional).</p>`;
-}
-
-function renderKoreksiForm(period) {
-  const root = document.getElementById('koreksi-section');
-  const isClosed = String(period.status || '').toLowerCase() === 'closed';
-  root.innerHTML = `<h3>Koreksi Saldo Awal</h3>
-    <p class="subtitle">Hak akses ADMIN/OWNER. Nilai otomatis tidak pernah ditimpa — koreksi tersimpan terpisah beserta alasan.</p>
-    ${isClosed ? '<div class="notice notice-warning">' + icon('lock', 15) + ' Periode sedang CLOSED. Buka kembali periode untuk melakukan koreksi.</div>' : '<div id="koreksi-form-root"></div>'}`;
-  if (isClosed) return;
-
-  buildForm(document.getElementById('koreksi-form-root'), [
-    { key: 'koreksi', label: 'Nominal Koreksi', type: 'number', required: true, hint: 'Boleh negatif. Ditambahkan ke Saldo Awal Otomatis.' },
-    { key: 'alasan', label: 'Alasan Koreksi', type: 'textarea', required: true, fullWidth: true }
-  ], { koreksi: '', alasan: '' }, null, async (values) => {
-    const res = await postData('correctSaldoAwal', { period_id: period.id, koreksi: Number(values.koreksi) || 0, alasan: values.alasan });
-    if (res.success) {
-      toast('Koreksi Saldo Awal berhasil disimpan.', 'success');
-      invalidateRecapCaches(period.id);
-      render(document.getElementById('view'));
-    }
-  }, { submitLabel: 'Simpan Koreksi', cancelable: false });
+  <p class="rk-note">Biaya Bersama = tenaga kerja bersama (Gaji &amp; Lembur tidak dibagi per Owner dan sudah termasuk di Pengeluaran). Pengeluaran hanya berlaku untuk PINGBRO &amp; SUNRISE.</p>`;
 }
