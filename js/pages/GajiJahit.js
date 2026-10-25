@@ -3,7 +3,7 @@
 // Nama Order, Jumlah — harga always price_rules global (category
 // jahit_borongan, price_group_id = null); no per-worker override in the UI.
 // ============================================================================
-import { renderCrudPage } from './_shared.js';
+import { renderCrudPage, sumOf, distinctCount, fmtInt } from './_shared.js';
 import { formatCurrency, escapeHtml } from '../ui.js';
 import { icon } from '../icons.js';
 import { getCurrentPeriod, getLookups } from '../state.js';
@@ -17,6 +17,8 @@ export async function render(container) {
   await renderCrudPage(container, {
     title: 'Gaji Jahit',
     subtitle: 'Pembayaran Borongan Jahit per pekerja. Harga Borongan selalu dari Master Harga global — tidak ada override per-pekerja.',
+    icon: 'needle',
+    showTrxId: true,
     headerExtra: buildImportExcelHeaderButtons('gaji_jahit'),
     listAction: 'getSewingWorkerPayments',
     listParams: () => ({ period_id: period?.id }),
@@ -25,7 +27,28 @@ export async function render(container) {
     ],
     emptyTitle: 'Belum ada pembayaran Gaji Jahit',
     emptyHint: 'Tambahkan pembayaran borongan per pekerja untuk periode ini.',
-    emptyIcon: '✂️',
+    clientFilters: [
+      { key: 'sewing_job_type_id', label: 'Jenis Pekerjaan', allLabel: 'Semua Jenis', icon: 'layers',
+        options: () => activeOnly(getLookups()?.sewingJobTypes).map((p) => ({ value: p.id, label: p.name })),
+        test: (r, v) => String(r.sewing_job_type_id) === String(v) }
+    ],
+    search: { label: 'Nama Order', placeholder: 'Cari nama order...', text: (r) => r.nama_order },
+    kpis: (rows) => [
+      { tone: 'success', icon: 'users', label: 'Total Pekerja', value: fmtInt(distinctCount(rows, 'employee_id')), unit: 'orang' },
+      { tone: 'info', icon: 'file', label: 'Total Transaksi', value: fmtInt(rows.length), unit: 'transaksi' },
+      { tone: 'warning', icon: 'package', label: 'Total Jumlah', value: fmtInt(sumOf(rows, 'jumlah')), unit: 'pcs' },
+      { tone: 'highlight', icon: 'wallet', label: 'Total Pembayaran', value: formatCurrency(sumOf(rows, 'total')) }
+    ],
+    summary: (rows) => [
+      { tone: 'success', icon: 'package', label: 'Total Jumlah', value: fmtInt(sumOf(rows, 'jumlah')) + ' pcs' },
+      { tone: 'highlight', icon: 'wallet', label: 'Total Pembayaran', value: formatCurrency(sumOf(rows, 'total')) },
+      { tone: 'warning', icon: 'calculator', label: 'Rata-rata per Pcs', value: formatCurrency(sumOf(rows, 'jumlah') ? sumOf(rows, 'total') / sumOf(rows, 'jumlah') : 0) }
+    ],
+    notes: [
+      'Harga Borongan selalu dari Master Harga global dan tidak dapat ditimpa per pekerja.',
+      'Total dihitung oleh server saat data disimpan; pratinjau di form hanya perkiraan.',
+      'Gunakan Import Excel atau Tambah Data untuk menambahkan transaksi baru. ID Transaksi bersifat permanen.'
+    ],
     columns: [
       { key: 'employee_id', label: 'Pekerja', format: (r) => escapeHtml(nameById(getLookups()?.employees, r.employee_id)) },
       { key: 'sewing_job_type_id', label: 'Jenis Pekerjaan', format: (r) => escapeHtml(nameById(getLookups()?.sewingJobTypes, r.sewing_job_type_id)) },

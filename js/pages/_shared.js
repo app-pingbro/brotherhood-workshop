@@ -14,6 +14,30 @@ import {
 } from '../ui.js';
 import { getState, getCurrentPeriod, getOwnerFilter, getLookups } from '../state.js';
 
+// Ukuran halaman tabel (paginasi sisi klien — tidak mengubah permintaan ke server).
+const PAGE_SIZES = [20, 50, 100];
+
+// Pembantu angka untuk KPI/ringkasan (hanya penjumlahan tampilan dari baris yang sudah dimuat).
+export const sumOf = (list, pick) => (list || []).reduce((a, r) => a + (Number(typeof pick === 'function' ? pick(r) : r[pick]) || 0), 0);
+export const distinctCount = (list, pick) => new Set((list || []).map((r) => (typeof pick === 'function' ? pick(r) : r[pick])).filter((v) => v !== undefined && v !== null && v !== '')).size;
+export const fmtInt = (n) => Math.round(Number(n) || 0).toLocaleString('id-ID');
+
+function trxChip(id) {
+  const v = String(id ?? '').trim();
+  return v ? `<span class="ux-id">${escapeHtml(v)}</span>` : '<span class="text-low">-</span>';
+}
+
+function pageList(pages, cur) {
+  if (pages <= 7) return Array.from({ length: pages }, (_, i) => i + 1);
+  const set = new Set([1, pages, cur - 1, cur, cur + 1]);
+  if (cur <= 3) { set.add(2); set.add(3); set.add(4); }
+  if (cur >= pages - 2) { set.add(pages - 1); set.add(pages - 2); set.add(pages - 3); }
+  const nums = Array.from(set).filter((n) => n >= 1 && n <= pages).sort((a, b) => a - b);
+  const out = [];
+  nums.forEach((n, i) => { if (i && n - nums[i - 1] > 1) out.push('…'); out.push(n); });
+  return out;
+}
+
 /**
  * @param {HTMLElement} container
  * @param {object} opts
@@ -25,28 +49,68 @@ import { getState, getCurrentPeriod, getOwnerFilter, getLookups } from '../state
  *   formTitle(mode), formFields: [Field]
  *   buildPayload(values, editingRow)
  *   mapRowToForm(row)
- *   emptyTitle, emptyHint, emptyIcon
- *   localFilters: [{key,label,type:'select',options(),allLabel}]
+ *   emptyTitle, emptyHint
+ *   localFilters: [{key,label,type:'select',options(),allLabel}]  -> dikirim ke server (params)
  *   periodRequired (default true) — blocks writes when the selected period is CLOSED
  *   onRowsLoaded(rows) — optional post-processing hook (e.g. compute summary)
  *   renderExtra(container, rows) — optional extra block under the table (e.g. totals)
+ *
+ *   Tambahan tampilan (semuanya opsional, murni presentasi atas baris yang sudah dimuat):
+ *   embedded      — bagian dalam halaman lain (judul h2 + ukuran lebih ringkas)
+ *   tableTitle    — judul kartu tabel (default "Daftar <title>")
+ *   showTrxId     — tambahkan kolom "ID Transaksi" (trx_id) di depan tabel
+ *   kpis(rows)    — [{tone,icon,label,value,unit}] kartu KPI di atas filter
+ *   clientFilters — [{key,label,allLabel,icon,options(),test(row,value)}] filter sisi klien
+ *   search        — {label,placeholder,text(row)} kolom pencarian sisi klien
+ *   summary(rows) — [{tone,icon,label,value}] panel ringkasan di bawah tabel
+ *   notes         — [string] panel "Keterangan" di bawah tabel
  */
 export async function renderCrudPage(container, opts) {
+  const localFilters = opts.localFilters || [];
+  const clientFilters = opts.clientFilters || [];
+  const search = opts.search || null;
   const localFilterValues = {};
-  (opts.localFilters || []).forEach((f) => { localFilterValues[f.key] = ''; });
+  localFilters.forEach((f) => { localFilterValues[f.key] = ''; });
+  const clientFilterValues = {};
+  clientFilters.forEach((f) => { clientFilterValues[f.key] = ''; });
+  let searchText = '';
+  let pageSize = PAGE_SIZES[0];
+  let pageNo = 1;
+
+  const cols = opts.showTrxId
+    ? [{ key: 'trx_id', label: 'ID Transaksi', format: (r) => trxChip(r.trx_id) }, ...(opts.columns || [])]
+    : (opts.columns || []);
+  const hasFilters = localFilters.length > 0 || clientFilters.length > 0 || Boolean(search);
+  const pageIcon = opts.icon || 'list';
+  const HeadTag = opts.embedded ? 'h2' : 'h1';
+  const listTitle = opts.tableTitle || `Daftar ${opts.title}`;
 
   container.innerHTML = `
-    <div class="page-header">
-      <div>
-        <h1>${escapeHtml(opts.title)}</h1>
-        <div class="subtitle">${escapeHtml(opts.subtitle || '')}</div>
+    <div class="page-header rk-header ux-head${opts.embedded ? ' ux-head--section' : ''}">
+      <div class="rk-title">
+        <div class="page-icon">${icon(pageIcon, opts.embedded ? 18 : 20)}</div>
+        <div>
+          <${HeadTag}>${escapeHtml(opts.title)}</${HeadTag}>
+          <div class="subtitle">${escapeHtml(opts.subtitle || '')}</div>
+        </div>
       </div>
-      <div class="page-header__actions" id="crud-actions"></div>
+      <div class="page-header__actions ux-actions" id="crud-actions"></div>
     </div>
-    <div id="crud-lock" class="notice notice-warning mb-12" style="display:none"></div>
-    <div class="card mb-12" id="crud-filters" style="${(opts.localFilters || []).length ? '' : 'display:none'}"></div>
-    <div id="crud-list">${skeletonTable((opts.columns || []).length + 1, 5)}</div>
-    <div id="crud-extra"></div>
+    <div class="ux-stack">
+      <div id="crud-lock" class="notice notice-warning" style="display:none"></div>
+      <div id="crud-kpis" class="ux-kpis dash-section" style="display:none"></div>
+      <div class="card ux-filters" id="crud-filters" style="display:none"></div>
+      <div class="card ux-table-card">
+        <div class="ux-table-head">
+          <span class="ux-table-head__icon">${icon(pageIcon, 18)}</span>
+          <h3>${escapeHtml(listTitle)}</h3>
+          <span class="ux-count" id="crud-count" aria-live="polite"></span>
+        </div>
+        <div id="crud-list">${skeletonTable(cols.length + 1, 5)}</div>
+        <div id="crud-pager" class="ux-pager" style="display:none"></div>
+      </div>
+      <div id="crud-extra"></div>
+    </div>
   `;
 
   // Bug 3/4 fix ("Gaji Harian & Lembur infinite loading" / "bug pindah
@@ -72,8 +136,11 @@ export async function renderCrudPage(container, opts) {
   // logic changes anywhere below — only WHERE results get painted.
   const lockEl = container.querySelector('#crud-lock');
   const actionsEl = container.querySelector('#crud-actions');
+  const kpisEl = container.querySelector('#crud-kpis');
   const filtersEl = container.querySelector('#crud-filters');
   const listRootEl = container.querySelector('#crud-list');
+  const countEl = container.querySelector('#crud-count');
+  const pagerEl = container.querySelector('#crud-pager');
   const extraEl = container.querySelector('#crud-extra');
 
   const period = getCurrentPeriod();
@@ -88,38 +155,137 @@ export async function renderCrudPage(container, opts) {
     lockEl.innerHTML = `${icon('lock')} Periode <strong>${escapeHtml(formatPeriodLabel(period))}</strong> berstatus <strong>CLOSED</strong> &mdash; data hanya bisa dilihat. Buka kembali periode ini dari Rekap Bulanan untuk mengedit.`;
   }
 
-  // Header action(s)
+  // Header action(s): tombol bantu (Import/Template) dulu, aksi utama "Tambah Data" di paling kanan.
   const actions = actionsEl;
+  if (opts.headerExtra) actions.appendChild(opts.headerExtra);
   if (opts.canAdd !== false) {
     const addBtn = document.createElement('button');
     addBtn.className = 'btn btn-primary';
-    addBtn.innerHTML = `${icon('plus')} Tambah`;
+    addBtn.innerHTML = `${icon('plus', 16)} Tambah Data`;
     addBtn.disabled = !canWrite;
     addBtn.addEventListener('click', () => openForm('add'));
     actions.appendChild(addBtn);
   }
-  if (opts.headerExtra) actions.appendChild(opts.headerExtra);
 
-  // Local filters
-  if ((opts.localFilters || []).length) {
-    const filterRoot = filtersEl;
-    filterRoot.innerHTML = `<div class="form-grid">${opts.localFilters.map((f) => `
+  // ---- Filter ------------------------------------------------------------
+  let rows = [];
+  let viewRows = [];
+
+  if (hasFilters) {
+    filtersEl.style.display = '';
+    const selectField = (f, attr, ic) => `
       <div class="field">
         <label>${escapeHtml(f.label)}</label>
-        <select class="input select-control" data-filter="${f.key}">
-          <option value="">${escapeHtml(f.allLabel || 'Semua')}</option>
-          ${f.options().map((o) => `<option value="${o.value}">${escapeHtml(o.label)}</option>`).join('')}
-        </select>
-      </div>`).join('')}</div>`;
-    filterRoot.querySelectorAll('[data-filter]').forEach((sel) => {
+        <div class="ux-input-wrap">
+          ${icon(f.icon || ic, 16)}
+          <select class="input select-control" ${attr}="${f.key}">
+            <option value="">${escapeHtml(f.allLabel || 'Semua')}</option>
+            ${f.options().map((o) => `<option value="${escapeHtml(o.value)}">${escapeHtml(o.label)}</option>`).join('')}
+          </select>
+        </div>
+      </div>`;
+    filtersEl.innerHTML = `<div class="ux-filter-grid">
+      ${localFilters.map((f) => selectField(f, 'data-filter', 'user')).join('')}
+      ${clientFilters.map((f) => selectField(f, 'data-cfilter', 'layers')).join('')}
+      ${search ? `<div class="field ux-search">
+        <label>${escapeHtml(search.label || 'Cari')}</label>
+        <div class="ux-input-wrap">${icon('search', 16)}<input class="input" type="search" data-search placeholder="${escapeHtml(search.placeholder || 'Cari...')}" autocomplete="off" /></div>
+      </div>` : ''}
+      <div class="field ux-reset-wrap"><button type="button" class="btn btn-secondary" data-reset>${icon('rotateCcw', 15)} Reset</button></div>
+    </div>`;
+    filtersEl.querySelectorAll('[data-filter]').forEach((sel) => {
       sel.addEventListener('change', () => {
         localFilterValues[sel.dataset.filter] = sel.value;
+        pageNo = 1;
         load();
       });
     });
+    filtersEl.querySelectorAll('[data-cfilter]').forEach((sel) => {
+      sel.addEventListener('change', () => {
+        clientFilterValues[sel.dataset.cfilter] = sel.value;
+        pageNo = 1;
+        refresh();
+      });
+    });
+    const searchInput = filtersEl.querySelector('[data-search]');
+    if (searchInput) {
+      searchInput.addEventListener('input', () => {
+        searchText = searchInput.value;
+        pageNo = 1;
+        refresh();
+      });
+    }
+    filtersEl.querySelector('[data-reset]').addEventListener('click', () => {
+      const serverChanged = Object.values(localFilterValues).some((v) => v !== '');
+      Object.keys(localFilterValues).forEach((k) => { localFilterValues[k] = ''; });
+      Object.keys(clientFilterValues).forEach((k) => { clientFilterValues[k] = ''; });
+      searchText = '';
+      pageNo = 1;
+      filtersEl.querySelectorAll('select').forEach((s) => { s.value = ''; });
+      if (searchInput) searchInput.value = '';
+      if (serverChanged) load(); else refresh();
+    });
   }
 
-  let rows = [];
+  // ---- Penyaringan sisi klien + render ----------------------------------
+  function applyClientFilters(list) {
+    let out = list;
+    clientFilters.forEach((f) => {
+      const v = clientFilterValues[f.key];
+      if (v !== '' && v !== undefined) out = out.filter((r) => f.test(r, v));
+    });
+    const q = searchText.trim().toLowerCase();
+    if (q && search) out = out.filter((r) => String(search.text(r) || '').toLowerCase().includes(q));
+    return out;
+  }
+
+  function renderKpis() {
+    if (!opts.kpis) return;
+    const items = opts.kpis(viewRows) || [];
+    kpisEl.style.display = items.length ? '' : 'none';
+    kpisEl.innerHTML = `<div class="ux-kpi-grid" data-n="${items.length}">${items.map((k) => `
+      <article class="ux-kpi ux-kpi--${k.tone || 'success'}">
+        <span class="ux-kpi__icon">${icon(k.icon || 'list', 22)}</span>
+        <div class="ux-kpi__body">
+          <div class="ux-kpi__label">${escapeHtml(k.label)}</div>
+          <div class="ux-kpi__value">${escapeHtml(k.value)}</div>
+          ${k.unit ? `<div class="ux-kpi__unit">${escapeHtml(k.unit)}</div>` : ''}
+        </div>
+      </article>`).join('')}</div>`;
+  }
+
+  function renderExtraBlock() {
+    const blocks = [];
+    if (opts.summary) {
+      const items = opts.summary(viewRows) || [];
+      if (items.length) {
+        blocks.push(`<div class="card ux-summary">
+          <div class="ux-card-title"><span class="ux-card-title__icon">${icon('calculator', 18)}</span><h3>Ringkasan ${escapeHtml(opts.title)} (Periode Ini)</h3></div>
+          <div class="ux-summary__grid">${items.map((s) => `
+            <div class="dstat dstat--${s.tone || 'success'}">
+              <span class="dstat__icon">${icon(s.icon || 'list', 18)}</span>
+              <div class="dstat__body"><div class="dstat__label">${escapeHtml(s.label)}</div><div class="dstat__value">${escapeHtml(s.value)}</div></div>
+            </div>`).join('')}</div>
+        </div>`);
+      }
+    }
+    if ((opts.notes || []).length) {
+      blocks.push(`<div class="card ux-notes">
+        <div class="ux-card-title"><span class="ux-card-title__icon ux-card-title__icon--info">${icon('info', 18)}</span><h3>Keterangan</h3></div>
+        <ul>${opts.notes.map((n) => `<li>${escapeHtml(n)}</li>`).join('')}</ul>
+      </div>`);
+    }
+    extraEl.innerHTML = `${blocks.length ? `<div class="ux-foot ux-foot--${blocks.length}">${blocks.join('')}</div>` : ''}<div class="ux-extra-custom"></div>`;
+    if (opts.renderExtra) opts.renderExtra(extraEl.querySelector('.ux-extra-custom'), viewRows);
+  }
+
+  function refresh() {
+    if (!listRootEl.isConnected) return;
+    viewRows = applyClientFilters(rows);
+    renderKpis();
+    renderTable(viewRows);
+    renderExtraBlock();
+  }
 
   // Instant UX (gas-instant-ux Prinsip 2/4): stale-while-revalidate. If this
   // exact list (action + period + owner + local filters) was already loaded
@@ -136,7 +302,7 @@ export async function renderCrudPage(container, opts) {
     if (!listRootEl.isConnected) return;
     const listRoot = listRootEl;
     if (!period) {
-      listRoot.innerHTML = emptyState('Belum ada periode dipilih', 'Gunakan selector periode di kanan atas.', '\u{1F4C5}');
+      listRoot.innerHTML = emptyState('Belum ada periode dipilih', 'Gunakan selector periode di kanan atas.', icon('calendar', 30));
       return;
     }
     const params = { ...(opts.listParams ? opts.listParams() : {}), ...localFilterValues };
@@ -149,13 +315,12 @@ export async function renderCrudPage(container, opts) {
       if (!listRootEl.isConnected) return;
       rows = Array.isArray(data) ? data : (data && data.items) || [];
       if (opts.onRowsLoaded) opts.onRowsLoaded(rows);
-      renderTable(rows);
-      if (opts.renderExtra) opts.renderExtra(extraEl, rows);
+      refresh();
     }
 
     const cached = peek(opts.listAction, params);
     if (cached === undefined) {
-      listRoot.innerHTML = skeletonTable((opts.columns || []).length + 1, 5);
+      listRoot.innerHTML = skeletonTable(cols.length + 1, 5);
     }
     try {
       await fetchSWR(opts.listAction, params, apply, { force });
@@ -171,11 +336,25 @@ export async function renderCrudPage(container, opts) {
 
   function renderTable(list) {
     const listRoot = listRootEl;
-    if (!list.length) {
-      listRoot.innerHTML = emptyState(opts.emptyTitle || 'Belum ada data', opts.emptyHint || 'Tambahkan data baru untuk periode ini.', opts.emptyIcon);
+    const total = list.length;
+    if (!rows.length) {
+      countEl.textContent = '0 data';
+      pagerEl.style.display = 'none';
+      listRoot.innerHTML = emptyState(opts.emptyTitle || 'Belum ada data', opts.emptyHint || 'Tambahkan data baru untuk periode ini.', icon(pageIcon, 30));
       return;
     }
-    const cols = opts.columns;
+    if (!total) {
+      countEl.textContent = `0 dari ${fmtInt(rows.length)} data`;
+      pagerEl.style.display = 'none';
+      listRoot.innerHTML = emptyState('Tidak ada data yang cocok', 'Ubah atau reset filter/pencarian untuk melihat data lainnya.', icon('search', 30));
+      return;
+    }
+    const pages = Math.max(1, Math.ceil(total / pageSize));
+    if (pageNo > pages) pageNo = pages;
+    const start = (pageNo - 1) * pageSize;
+    const end = Math.min(total, start + pageSize);
+    countEl.textContent = `Menampilkan ${fmtInt(start + 1)}–${fmtInt(end)} dari ${fmtInt(total)} data` + (total !== rows.length ? ` (difilter dari ${fmtInt(rows.length)})` : '');
+
     const showActions = opts.canEdit !== false || opts.canDelete !== false || opts.canDuplicate !== false;
     listRoot.innerHTML = `
       <div class="table-wrap"><table class="data-table">
@@ -184,13 +363,13 @@ export async function renderCrudPage(container, opts) {
           ${showActions ? '<th class="num">Aksi</th>' : ''}
         </tr></thead>
         <tbody>
-          ${list.map((row, idx) => `
-            <tr data-idx="${idx}">
+          ${list.slice(start, end).map((row, i) => `
+            <tr data-idx="${start + i}">
               ${cols.map((c) => `<td class="${c.align === 'num' ? 'num' : ''}">${c.format ? c.format(row) : escapeHtml(row[c.key] ?? '-')}</td>`).join('')}
               ${showActions ? `<td class="row-actions">
-                ${opts.canDuplicate !== false ? `<button class="btn btn-outline btn-sm btn-icon" data-act="dup" title="Duplikat" ${!canWrite ? 'disabled' : ''}>${icon('copy', 15)}</button>` : ''}
-                ${opts.canEdit !== false ? `<button class="btn btn-outline btn-sm btn-icon" data-act="edit" title="Edit" ${!canWrite ? 'disabled' : ''}>${icon('edit', 15)}</button>` : ''}
-                ${opts.canDelete !== false ? `<button class="btn btn-outline btn-sm btn-icon" data-act="del" title="Hapus" ${!canWrite ? 'disabled' : ''}>${icon('trash', 15)}</button>` : ''}
+                ${opts.canDuplicate !== false ? `<button class="btn btn-outline btn-sm btn-icon ux-act" data-act="dup" title="Duplikat" aria-label="Duplikat" ${!canWrite ? 'disabled' : ''}>${icon('copy', 15)}</button>` : ''}
+                ${opts.canEdit !== false ? `<button class="btn btn-outline btn-sm btn-icon ux-act ux-act--edit" data-act="edit" title="Edit" aria-label="Edit" ${!canWrite ? 'disabled' : ''}>${icon('edit', 15)}</button>` : ''}
+                ${opts.canDelete !== false ? `<button class="btn btn-outline btn-sm btn-icon ux-act ux-act--del" data-act="del" title="Hapus" aria-label="Hapus" ${!canWrite ? 'disabled' : ''}>${icon('trash', 15)}</button>` : ''}
               </td>` : ''}
             </tr>
           `).join('')}
@@ -206,6 +385,33 @@ export async function renderCrudPage(container, opts) {
         else if (act === 'dup') openForm('duplicate', row);
         else if (act === 'del') handleDelete(row);
       });
+    });
+    renderPager(total, pages);
+  }
+
+  function renderPager(total, pages) {
+    if (total <= PAGE_SIZES[0]) { pagerEl.style.display = 'none'; pagerEl.innerHTML = ''; return; }
+    pagerEl.style.display = '';
+    pagerEl.innerHTML = `
+      <label class="ux-pager__size">Tampilkan
+        <select class="input select-control" data-pagesize aria-label="Data per halaman">
+          ${PAGE_SIZES.map((n) => `<option value="${n}"${n === pageSize ? ' selected' : ''}>${n}</option>`).join('')}
+        </select>
+        data per halaman</label>
+      <nav class="ux-pages" aria-label="Halaman">
+        <button type="button" class="ux-page" data-page="${pageNo - 1}" aria-label="Halaman sebelumnya" ${pageNo <= 1 ? 'disabled' : ''}>${icon('chevronLeft', 16)}</button>
+        ${pageList(pages, pageNo).map((n) => n === '…'
+          ? '<span class="ux-page ux-page--gap">…</span>'
+          : `<button type="button" class="ux-page${n === pageNo ? ' is-active' : ''}" data-page="${n}" ${n === pageNo ? 'aria-current="page"' : ''}>${n}</button>`).join('')}
+        <button type="button" class="ux-page" data-page="${pageNo + 1}" aria-label="Halaman berikutnya" ${pageNo >= pages ? 'disabled' : ''}>${icon('chevronRight', 16)}</button>
+      </nav>`;
+    pagerEl.querySelectorAll('[data-page]').forEach((b) => {
+      b.addEventListener('click', () => { pageNo = Number(b.dataset.page); renderTable(viewRows); });
+    });
+    pagerEl.querySelector('[data-pagesize]').addEventListener('change', (e) => {
+      pageSize = Number(e.target.value) || PAGE_SIZES[0];
+      pageNo = 1;
+      renderTable(viewRows);
     });
   }
 

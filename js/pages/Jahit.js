@@ -5,24 +5,44 @@
 // field — the server always computes/snapshots it from price_rules (see
 // js/config.js comment on this judgment call re: PRD "harga bisa ditimpa").
 // ============================================================================
-import { renderCrudPage } from './_shared.js';
+import { renderCrudPage, sumOf, fmtInt } from './_shared.js';
 import { formatCurrency, escapeHtml, badge } from '../ui.js';
 import { icon } from '../icons.js';
 import { getCurrentPeriod, getOwnerFilter, getLookups } from '../state.js';
 import { ownerIdByCode, ownerName, ownerOptions, activeOnly } from '../lookups.js';
 import { PRICE_CATEGORY } from '../config.js';
 import { previewJahit, ownerPriceGroupId } from '../pricing.js';
+import { buildImportExcelHeaderButtons } from './ImportExcel.js';
 
 export async function render(container) {
   const period = getCurrentPeriod();
   await renderCrudPage(container, {
     title: 'Jahit',
     subtitle: 'Transaksi jual produk Jahit per Owner.',
+    icon: 'scissors',
+    showTrxId: true,
+    headerExtra: buildImportExcelHeaderButtons('jahit'),
     listAction: 'getSewingTransactions',
     listParams: () => ({ period_id: period?.id, owner_id: ownerIdByCode(getLookups(), getOwnerFilter()) }),
     emptyTitle: 'Belum ada transaksi Jahit',
     emptyHint: 'Tambahkan transaksi baru, atau gunakan Import Excel untuk input massal.',
-    emptyIcon: '✂️',
+    clientFilters: [
+      { key: 'product_type_id', label: 'Jenis Produk', allLabel: 'Semua Jenis', icon: 'shirt',
+        options: () => activeOnly(getLookups()?.productTypes).map((p) => ({ value: p.id, label: p.name })),
+        test: (r, v) => String(r.product_type_id) === String(v) }
+    ],
+    search: { label: 'Nama Order', placeholder: 'Cari nama order...', text: (r) => r.nama_order },
+    kpis: (rows) => [
+      { tone: 'success', icon: 'receipt', label: 'Total Transaksi', value: fmtInt(rows.length), unit: 'transaksi' },
+      { tone: 'info', icon: 'package', label: 'Total Jumlah', value: fmtInt(sumOf(rows, 'jumlah')), unit: 'pcs' },
+      { tone: 'warning', icon: 'wallet', label: 'Total Omzet', value: formatCurrency(sumOf(rows, 'total')) },
+      { tone: 'highlight', icon: 'calculator', label: 'Rata-rata per Pcs', value: formatCurrency(sumOf(rows, 'jumlah') ? sumOf(rows, 'total') / sumOf(rows, 'jumlah') : 0) }
+    ],
+    notes: [
+      'Harga dan Total dihitung oleh server dari Master Harga; pratinjau di form hanya perkiraan.',
+      'Data yang tampil mengikuti Periode dan filter Owner di bagian atas halaman.',
+      'Gunakan Import Excel untuk input massal. ID Transaksi tetap permanen dan tidak berubah saat import ulang.'
+    ],
     columns: [
       { key: 'owner', label: 'Owner', format: (r) => ownerTag(r) },
       { key: 'product_type_id', label: 'Jenis Produk', format: (r) => escapeHtml(nameOf(r, 'productTypes', 'product_type_id')) },

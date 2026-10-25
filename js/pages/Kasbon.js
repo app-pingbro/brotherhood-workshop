@@ -4,7 +4,8 @@
 // and the list shows Sisa Hutang = Total Hutang - Σ cicilan terpotong
 // (server-computed, displayed read-only here).
 // ============================================================================
-import { renderCrudPage } from './_shared.js';
+import { renderCrudPage, sumOf, distinctCount, fmtInt } from './_shared.js';
+import { buildImportExcelHeaderButtons } from './ImportExcel.js';
 import { formatCurrency, formatDate, escapeHtml, badge } from '../ui.js';
 import { getCurrentPeriod, getLookups } from '../state.js';
 import { nameById, toOptions } from '../lookups.js';
@@ -18,6 +19,8 @@ export async function render(container) {
   await renderCrudPage(container, {
     title: 'Kasbon & Potongan',
     subtitle: 'Kasbon, Hutang-Cicilan, dan Potongan Lain per pekerja. Tidak masuk Total Biaya Rekap — hanya potongan Slip Gaji.',
+    icon: 'minus',
+    headerExtra: buildImportExcelHeaderButtons('kasbon'),
     listAction: 'getPayrollDeductions',
     listParams: () => ({ period_id: period?.id }),
     localFilters: [
@@ -26,7 +29,21 @@ export async function render(container) {
     ],
     emptyTitle: 'Belum ada Kasbon/Potongan',
     emptyHint: 'Tambahkan kasbon, cicilan hutang, atau potongan lain untuk pekerja.',
-    emptyIcon: '\u{1F4B8}',
+    search: { label: 'Keterangan', placeholder: 'Cari keterangan...', text: (r) => r.keterangan },
+    kpis: (rows) => {
+      const by = (j) => rows.filter((r) => r.jenis === j);
+      return [
+        { tone: 'success', icon: 'users', label: 'Total Pekerja', value: fmtInt(distinctCount(rows, 'employee_id')), unit: 'orang' },
+        { tone: 'warning', icon: 'wallet', label: 'Total Kasbon', value: formatCurrency(sumOf(by('kasbon'), 'nominal')) },
+        { tone: 'critical', icon: 'receipt', label: 'Cicilan Hutang', value: formatCurrency(sumOf(by('hutang_cicilan'), 'nominal')) },
+        { tone: 'highlight', icon: 'minus', label: 'Potongan Lain', value: formatCurrency(sumOf(by('potongan_lain'), 'nominal')) }
+      ];
+    },
+    notes: [
+      'Kasbon, Hutang-Cicilan, dan Potongan Lain tidak masuk Total Biaya Rekap; hanya menjadi potongan di Slip Gaji.',
+      'Sisa Hutang dihitung oleh server dari Total Hutang dikurangi cicilan yang sudah terpotong.',
+      'Periode yang berstatus CLOSED hanya dapat dilihat, tidak dapat diubah.'
+    ],
     columns: [
       { key: 'employee_id', label: 'Pekerja', format: (r) => escapeHtml(nameById(getLookups()?.employees, r.employee_id)) },
       { key: 'jenis', label: 'Jenis', format: (r) => badge(TYPE_LABEL[r.jenis] || r.jenis, TYPE_TONE[r.jenis] || 'neutral') },

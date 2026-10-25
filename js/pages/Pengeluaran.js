@@ -15,10 +15,10 @@
 // every other module already uses (backend/ExcelImport.gs) — no separate
 // import mechanism was built for Pengeluaran.
 // ============================================================================
-import { renderCrudPage } from './_shared.js';
+import { renderCrudPage, sumOf, fmtInt } from './_shared.js';
 import { formatCurrency, formatDate, escapeHtml } from '../ui.js';
 import { getCurrentPeriod, getOwnerFilter, getLookups } from '../state.js';
-import { ownerIdByCode, ownerName, ownerOptions } from '../lookups.js';
+import { ownerIdByCode, ownerName, ownerOptions, ownerCodeById } from '../lookups.js';
 import { EXPENSE_OWNERS } from '../config.js';
 import { buildImportExcelHeaderButtons } from './ImportExcel.js';
 
@@ -27,29 +27,37 @@ export async function render(container) {
   await renderCrudPage(container, {
     title: 'Pengeluaran',
     subtitle: 'Biaya operasional per bulan. Hanya tercatat untuk PINGBRO dan SUNRISE.',
+    icon: 'receipt',
+    showTrxId: true,
     listAction: 'getExpenses',
     listParams: () => {
       const code = getOwnerFilter();
       const restricted = EXPENSE_OWNERS.includes(code) ? code : undefined;
       return { period_id: period?.id, owner_id: ownerIdByCode(getLookups(), restricted) };
     },
-    headerExtra: (() => {
-      const wrap = document.createElement('div');
-      wrap.style.display = 'flex';
-      wrap.style.gap = '12px';
-      wrap.style.alignItems = 'center';
-      wrap.style.flexWrap = 'wrap';
-      wrap.appendChild(buildImportExcelHeaderButtons('pengeluaran'));
-      const note = document.createElement('span');
-      note.className = 'text-low';
-      note.style.fontSize = '12px';
-      note.textContent = 'BROTHERHOOD tidak tersedia — tidak punya Pengeluaran operasional sendiri.';
-      wrap.appendChild(note);
-      return wrap;
-    })(),
+    headerExtra: buildImportExcelHeaderButtons('pengeluaran'),
     emptyTitle: 'Belum ada Pengeluaran',
     emptyHint: 'Tambahkan biaya operasional PINGBRO/SUNRISE untuk periode ini.',
-    emptyIcon: '\u{1F9FE}',
+    clientFilters: [
+      { key: 'expense_type_id', label: 'Jenis Pengeluaran', allLabel: 'Semua Jenis', icon: 'tag',
+        options: () => (getLookups()?.expenseTypes || []).filter((x) => x.active !== false).map((x) => ({ value: x.id, label: x.name })),
+        test: (r, v) => String(r.expense_type_id) === String(v) }
+    ],
+    search: { label: 'Keterangan', placeholder: 'Cari keterangan...', text: (r) => r.keterangan },
+    kpis: (rows) => {
+      const ownerTotal = (code) => sumOf(rows.filter((r) => ownerCodeById(getLookups(), r.owner_id) === code), 'nominal');
+      return [
+        { tone: 'info', icon: 'receipt', label: 'Total Transaksi', value: fmtInt(rows.length), unit: 'transaksi' },
+        { tone: 'critical', icon: 'wallet', label: 'Total Pengeluaran', value: formatCurrency(sumOf(rows, 'nominal')) },
+        { tone: 'success', icon: 'building', label: 'PINGBRO', value: formatCurrency(ownerTotal('PINGBRO')) },
+        { tone: 'highlight', icon: 'building', label: 'SUNRISE', value: formatCurrency(ownerTotal('SUNRISE')) }
+      ];
+    },
+    notes: [
+      'Pengeluaran hanya dicatat untuk PINGBRO dan SUNRISE; BROTHERHOOD tidak punya Pengeluaran operasional sendiri.',
+      'Jenis Pengeluaran bisa diketik bebas; jenis baru otomatis ditambahkan ke Master Data saat disimpan.',
+      'Gunakan Import Excel untuk input massal. ID Transaksi bersifat permanen.'
+    ],
     columns: [
       { key: 'owner_id', label: 'Owner', format: (r) => ownerTag(r) },
       { key: 'tanggal', label: 'Tanggal', format: (r) => formatDate(r.tanggal) },

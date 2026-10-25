@@ -43,7 +43,7 @@ const NAV = [
   ] },
   { group: 'Penggajian', items: [
     { path: '#/gaji-jahit', label: 'Gaji Jahit', icon: 'needle', page: GajiJahitPage },
-    { path: '#/gaji-sablon', label: 'Gaji Sablon', icon: 'droplet', page: GajiSablonPage },
+    { path: '#/gaji-sablon', label: 'Gaji Sablon', icon: 'palette', page: GajiSablonPage },
     { path: '#/gaji-harian', label: 'Gaji Harian & Lembur', icon: 'clock', page: GajiHarianPage },
     { path: '#/kasbon', label: 'Kasbon & Potongan', icon: 'minus', page: KasbonPage },
     { path: '#/slip-gaji', label: 'Slip Gaji', icon: 'file', page: SlipGajiPage }

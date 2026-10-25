@@ -3,24 +3,44 @@
 // Warna, Jumlah; live formula preview (HARGA_DASAR + (WARNA-1) x TAMBAHAN)
 // as a client-side hint only — server value is final.
 // ============================================================================
-import { renderCrudPage } from './_shared.js';
+import { renderCrudPage, sumOf, fmtInt } from './_shared.js';
 import { formatCurrency, escapeHtml, badge } from '../ui.js';
 import { icon } from '../icons.js';
 import { getCurrentPeriod, getOwnerFilter, getLookups } from '../state.js';
 import { ownerIdByCode, ownerName, ownerOptions, activeOnly } from '../lookups.js';
 import { PRICE_CATEGORY } from '../config.js';
 import { previewSablon, ownerPriceGroupId } from '../pricing.js';
+import { buildImportExcelHeaderButtons } from './ImportExcel.js';
 
 export async function render(container) {
   const period = getCurrentPeriod();
   await renderCrudPage(container, {
     title: 'Sablon',
     subtitle: 'Transaksi jual produk Sablon per Owner.',
+    icon: 'droplet',
+    showTrxId: true,
+    headerExtra: buildImportExcelHeaderButtons('sablon'),
     listAction: 'getPrintingTransactions',
     listParams: () => ({ period_id: period?.id, owner_id: ownerIdByCode(getLookups(), getOwnerFilter()) }),
     emptyTitle: 'Belum ada transaksi Sablon',
     emptyHint: 'Tambahkan transaksi baru, atau gunakan Import Excel untuk input massal.',
-    emptyIcon: '\u{1F3A8}',
+    clientFilters: [
+      { key: 'ink_type_id', label: 'Jenis Tinta', allLabel: 'Semua Tinta', icon: 'droplet',
+        options: () => activeOnly(getLookups()?.inkTypes).map((p) => ({ value: p.id, label: p.name })),
+        test: (r, v) => String(r.ink_type_id) === String(v) }
+    ],
+    search: { label: 'Nama Desain', placeholder: 'Cari nama desain...', text: (r) => r.nama_desain },
+    kpis: (rows) => [
+      { tone: 'success', icon: 'receipt', label: 'Total Transaksi', value: fmtInt(rows.length), unit: 'transaksi' },
+      { tone: 'info', icon: 'package', label: 'Total Jumlah', value: fmtInt(sumOf(rows, 'jumlah')), unit: 'pcs' },
+      { tone: 'warning', icon: 'wallet', label: 'Total Omzet', value: formatCurrency(sumOf(rows, 'total')) },
+      { tone: 'highlight', icon: 'calculator', label: 'Rata-rata per Pcs', value: formatCurrency(sumOf(rows, 'jumlah') ? sumOf(rows, 'total') / sumOf(rows, 'jumlah') : 0) }
+    ],
+    notes: [
+      'Harga dan Total dihitung oleh server dari Master Harga (Harga Dasar + tambahan per warna); pratinjau di form hanya perkiraan.',
+      'Data yang tampil mengikuti Periode dan filter Owner di bagian atas halaman.',
+      'Gunakan Import Excel untuk input massal. ID Transaksi tetap permanen dan tidak berubah saat import ulang.'
+    ],
     columns: [
       { key: 'owner', label: 'Owner', format: (r) => ownerTag(r) },
       { key: 'ink_type_id', label: 'Jenis Tinta', format: (r) => escapeHtml(nameOf(r, 'inkTypes', 'ink_type_id')) },

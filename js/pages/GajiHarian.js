@@ -5,11 +5,12 @@
 // tarif_lembur override settings.default_*). Shows a "Custom" tag when the
 // selected worker carries a per-worker override.
 // ============================================================================
-import { renderCrudPage } from './_shared.js';
+import { renderCrudPage, sumOf, distinctCount, fmtInt } from './_shared.js';
 import { formatCurrency, escapeHtml, badge } from '../ui.js';
 import { getCurrentPeriod, getLookups } from '../state.js';
 import { byId, nameById, toOptions } from '../lookups.js';
 import { previewGajiHarian, previewLembur, resolveTarif } from '../pricing.js';
+import { icon } from '../icons.js';
 import { buildImportExcelHeaderButtons } from './ImportExcel.js';
 
 function getSetting(lookups, key, fallback = 0) {
@@ -20,12 +21,14 @@ function getSetting(lookups, key, fallback = 0) {
 export async function render(container) {
   const period = getCurrentPeriod();
   container.innerHTML = `
-    <div class="page-header">
-      <div><h1>Gaji Harian &amp; Lembur</h1><div class="subtitle">Gaji Harian/Minggu dan Lembur per pekerja untuk periode berjalan.</div></div>
-      <div class="page-header__actions" id="gaji-harian-actions"></div>
+    <div class="page-header rk-header ux-head">
+      <div class="rk-title">
+        <div class="page-icon">${icon('clock', 20)}</div>
+        <div><h1>Gaji Harian &amp; Lembur</h1><div class="subtitle">Gaji Harian/Minggu dan Lembur per pekerja untuk periode berjalan.</div></div>
+      </div>
+      <div class="page-header__actions ux-actions" id="gaji-harian-actions"></div>
     </div>
     <div id="section-daily"></div>
-    <div class="mt-20"></div>
     <div id="section-overtime"></div>
   `;
   // One entry point for both sections on this page — the wizard's own
@@ -35,13 +38,24 @@ export async function render(container) {
 
   await renderCrudPage(document.getElementById('section-daily'), {
     title: 'Gaji Harian & Minggu',
+    embedded: true,
+    icon: 'calendar',
     subtitle: 'Total = (Hari Biasa × Tarif Harian) + (Hari Minggu × Tarif Minggu).',
     listAction: 'getDailyWorkerPayments',
     listParams: () => ({ period_id: period?.id }),
     localFilters: [{ key: 'employee_id', label: 'Pekerja', allLabel: 'Semua Pekerja', options: () => toOptions(getLookups()?.employees) }],
     emptyTitle: 'Belum ada Gaji Harian',
     emptyHint: 'Tambahkan data hari kerja pekerja untuk periode ini.',
-    emptyIcon: '\u{1F4C6}',
+    kpis: (rows) => [
+      { tone: 'success', icon: 'users', label: 'Total Pekerja', value: fmtInt(distinctCount(rows, 'employee_id')), unit: 'orang' },
+      { tone: 'info', icon: 'calendar', label: 'Hari Biasa', value: fmtInt(sumOf(rows, 'jumlah_hari_biasa')), unit: 'hari' },
+      { tone: 'warning', icon: 'sun', label: 'Hari Minggu', value: fmtInt(sumOf(rows, 'jumlah_hari_minggu')), unit: 'hari' },
+      { tone: 'highlight', icon: 'wallet', label: 'Total Gaji Harian', value: formatCurrency(sumOf(rows, 'total')) }
+    ],
+    notes: [
+      'Tarif terisi otomatis dari tarif khusus pekerja bila ada, selain itu dari tarif default global; tetap bisa diubah per baris.',
+      'Total dihitung oleh server saat data disimpan.'
+    ],
     columns: [
       { key: 'employee_id', label: 'Pekerja', format: (r) => escapeHtml(nameById(getLookups()?.employees, r.employee_id)) },
       { key: 'jumlah_hari_biasa', label: 'Hari Biasa', align: 'num' },
@@ -81,13 +95,22 @@ export async function render(container) {
 
   await renderCrudPage(document.getElementById('section-overtime'), {
     title: 'Lembur',
+    embedded: true,
+    icon: 'clock',
     subtitle: 'Total = Jam × Tarif Lembur.',
     listAction: 'getOvertime',
     listParams: () => ({ period_id: period?.id }),
     localFilters: [{ key: 'employee_id', label: 'Pekerja', allLabel: 'Semua Pekerja', options: () => toOptions(getLookups()?.employees) }],
     emptyTitle: 'Belum ada data Lembur',
     emptyHint: 'Tambahkan jam lembur pekerja untuk periode ini.',
-    emptyIcon: '⏱️',
+    kpis: (rows) => [
+      { tone: 'success', icon: 'users', label: 'Total Pekerja', value: fmtInt(distinctCount(rows, 'employee_id')), unit: 'orang' },
+      { tone: 'info', icon: 'clock', label: 'Total Jam Lembur', value: fmtInt(sumOf(rows, 'jumlah_jam')), unit: 'jam' },
+      { tone: 'highlight', icon: 'wallet', label: 'Total Lembur', value: formatCurrency(sumOf(rows, 'total')) }
+    ],
+    notes: [
+      'Total Lembur = Jumlah Jam x Tarif Lembur per jam, dihitung oleh server saat data disimpan.'
+    ],
     columns: [
       { key: 'employee_id', label: 'Pekerja', format: (r) => escapeHtml(nameById(getLookups()?.employees, r.employee_id)) },
       { key: 'jumlah_jam', label: 'Jumlah Jam', align: 'num' },

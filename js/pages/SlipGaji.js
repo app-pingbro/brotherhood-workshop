@@ -43,17 +43,24 @@ export async function render(container) {
   installRouteWatcher();
   const period = getCurrentPeriod();
   container.innerHTML = `
-    <div class="page-header no-print">
-      <div><h1>Slip Gaji</h1><div class="subtitle">${period ? escapeHtml(formatPeriodLabel(period)) : 'Pilih periode di kanan atas'}</div></div>
+    <div class="page-header rk-header ux-head no-print">
+      <div class="rk-title">
+        <div class="page-icon">${icon('file', 20)}</div>
+        <div><h1>Slip Gaji</h1><div class="subtitle">${period ? escapeHtml(formatPeriodLabel(period)) : 'Pilih periode di kanan atas'}</div></div>
+      </div>
     </div>
-    <div class="card mb-16 no-print">
+    <div class="card mb-16 no-print ux-slip-pick">
+      <div class="ux-card-title"><span class="ux-card-title__icon">${icon('user', 18)}</span><h3>Pilih Pekerja</h3></div>
       <div class="form-grid">
         <div class="field">
           <label>Pekerja</label>
-          <select class="input select-control" id="slip-employee">
-            <option value="">Pilih pekerja...</option>
-            ${toOptions(getLookups()?.employees).map((o) => `<option value="${o.value}">${escapeHtml(o.label)}</option>`).join('')}
-          </select>
+          <div class="ux-input-wrap">
+            ${icon('user', 16)}
+            <select class="input select-control" id="slip-employee">
+              <option value="">Pilih pekerja...</option>
+              ${toOptions(getLookups()?.employees).map((o) => `<option value="${o.value}">${escapeHtml(o.label)}</option>`).join('')}
+            </select>
+          </div>
         </div>
       </div>
     </div>
@@ -160,14 +167,15 @@ async function renderSlip(slip, period, employeeId, reqId) {
       ${locked ? `<div class="slip-locked-banner no-print">${icon('lock', 15)} SNAPSHOT CLOSED &mdash; nilai dibekukan saat periode ditutup, tidak dihitung ulang.</div>` : ''}
 
       <div class="slip-toolbar no-print">
-        <div class="slip-toolbar__hint">Pratinjau A4 &middot; PNG &amp; PDF memakai data yang sama</div>
+        <div class="slip-toolbar__hint">${icon('info', 15)} Pratinjau A4 &middot; PNG &amp; PDF memakai data yang sama</div>
         <div class="slip-toolbar__actions">
           <button class="btn btn-secondary btn-sm" id="slip-png">${icon('download', 15)} Download PNG</button>
           <button class="btn btn-secondary btn-sm" id="slip-print">${icon('print', 15)} Cetak / Simpan PDF</button>
         </div>
       </div>
 
-      <div class="card mb-16 no-print" id="slip-payer-editor">
+      <div class="card mb-16 no-print ux-slip-payer" id="slip-payer-editor">
+        <div class="ux-card-title"><span class="ux-card-title__icon">${icon('wallet', 18)}</span><h3>Pembayar Gaji</h3></div>
         <div class="form-grid">
           <div class="field">
             <label>Dibayarkan Oleh (Pengeluaran masuk ke Owner ini)</label>
