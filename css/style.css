@@ -1052,3 +1052,18 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 
 /* ID Transaksi (Import Excel) */
 .trx-id { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; letter-spacing: .02em; background: var(--color-surface-muted); color: var(--color-text-high); padding: 1px 6px; border-radius: 6px; white-space: nowrap; }
+
+/* ---------------------------------------------------------------------- */
+/* Branding (header / login) — logo Brotherhood memakai rasio ASLI          */
+/* (object-fit: contain, tidak dipotong), kotak putih sama seperti Slip     */
+/* Gaji. Cadangan "BW" tetap memakai warna primer.                          */
+/* ---------------------------------------------------------------------- */
+.sidebar__brand { align-items: center; gap: 12px; padding: 16px 16px 14px; }
+.sidebar__brand-mark { width: 44px; height: 44px; border-radius: 12px; flex: none; overflow: hidden; }
+.login-card .brand-mark { width: 60px; height: 60px; border-radius: 15px; overflow: hidden; }
+.sidebar__brand-mark.has-logo,
+.login-card .brand-mark.has-logo { background: #fff; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .08); }
+.sidebar__brand-mark img,
+.login-card .brand-mark img { width: 100%; height: 100%; object-fit: contain; display: block; border-radius: 0; }
+.sidebar__brand-text { min-width: 0; font-size: 13px; line-height: 1.25; letter-spacing: .04em; text-wrap: balance; overflow-wrap: anywhere; }
+.login-card h1 { font-size: 17px; letter-spacing: .04em; line-height: 1.25; text-wrap: balance; }

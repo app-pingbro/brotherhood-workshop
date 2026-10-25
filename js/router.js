@@ -16,6 +16,7 @@ import {
 import { isAuthenticated, requireAuth, logout } from './auth.js';
 import { toggleTheme, currentTheme } from './theme.js';
 import { toast, formatPeriodLabel } from './ui.js';
+import { BRAND_NAME, updateBrand, hideSplash } from './brand.js';
 
 import * as LoginPage from './pages/Login.js';
 import * as DashboardPage from './pages/Dashboard.js';
@@ -241,7 +242,7 @@ function buildShell() {
       <aside class="sidebar" id="sidebar">
         <div class="sidebar__brand">
           <div class="sidebar__brand-mark">BW</div>
-          <div class="sidebar__brand-text">Workshop Manager<small>PINGBRO · SUNRISE · BROTHERHOOD</small></div>
+          <div class="sidebar__brand-text">${BRAND_NAME}</div>
         </div>
         <nav class="sidebar__nav" id="sidebar-nav"></nav>
         <div class="sidebar__footer">
@@ -338,6 +339,7 @@ function buildShell() {
   document.getElementById('sidebar-backdrop').addEventListener('click', closeSidebar);
 
   shellBuilt = true;
+  hideSplash();
 }
 
 // Instant UX: no dedicated fetch — reads the already-cached getLookups()
@@ -348,8 +350,7 @@ function buildShell() {
 function updateBrandLogo() {
   const mark = document.querySelector('.sidebar__brand-mark');
   if (!mark) return;
-  const url = getCompanyLogoUrl();
-  mark.innerHTML = url ? `<img src="${url}" alt="Logo perusahaan" />` : 'BW';
+  updateBrand(mark); // logo Brotherhood yang sama dengan Slip Gaji / login / splash / favicon (lihat brand.js)
 }
 
 function updateUserChip() {
@@ -417,6 +418,7 @@ async function renderLoginOnly() {
   }
   root.innerHTML = '';
   await LoginPage.render(root);
+  hideSplash();
 }
 
 export function navigateTo(path) {
