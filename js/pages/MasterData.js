@@ -47,8 +47,11 @@ let activeTab = 'owners';
 
 export async function render(container) {
   container.innerHTML = `
-    <div class="page-header">
-      <div><h1>Master Data</h1><div class="subtitle">Data referensi &amp; pengaturan. Data yang sudah dipakai transaksi hanya bisa dinonaktifkan, tidak dihapus.</div></div>
+    <div class="page-header rk-header ux-head">
+      <div class="rk-title">
+        <div class="page-icon">${icon('settings', 20)}</div>
+        <div><h1>Master Data</h1><div class="subtitle">Data referensi &amp; pengaturan. Data yang sudah dipakai transaksi hanya bisa dinonaktifkan, tidak dihapus.</div></div>
+      </div>
     </div>
     <div class="tabs" id="md-tabs"></div>
     <div id="md-body"></div>
@@ -86,9 +89,19 @@ async function renderTab() {
   // silently refresh from the server (stale-while-revalidate).
   const cached = peek('getMaster', params);
   body.innerHTML = `
-    ${activeTab === 'settings' ? '<div class="card mb-16" id="md-company-info"></div><div class="card mb-16" id="md-danger-zone"></div>' : ''}
-    <div class="page-header"><div></div><div class="page-header__actions"><button class="btn btn-primary" id="md-add">${icon('plus', 15)} Tambah ${escapeHtml(cfg.label)}</button></div></div>
-    <div id="md-list">${cached === undefined ? skeletonTable(cfg.columns.length + 1, 5) : ''}</div>
+    <div class="ux-stack">
+      ${activeTab === 'settings' ? '<div class="card" id="md-company-info"></div><div class="card" id="md-danger-zone"></div>' : ''}
+      <div id="md-kpis" class="dash-section"></div>
+      <div class="card ux-table-card">
+        <div class="ux-table-head">
+          <span class="ux-table-head__icon">${icon('list', 18)}</span>
+          <h3>Daftar ${escapeHtml(cfg.label)}</h3>
+          <span class="ux-count" id="md-count"></span>
+          <button class="btn btn-primary" id="md-add">${icon('plus', 16)} Tambah ${escapeHtml(cfg.label)}</button>
+        </div>
+        <div id="md-list">${cached === undefined ? skeletonTable(cfg.columns.length + 1, 5) : ''}</div>
+      </div>
+    </div>
   `;
   document.getElementById('md-add').addEventListener('click', () => openEntityForm(cfg, null));
   if (activeTab === 'settings') { renderCompanyInfoCard(); renderDangerZoneCard(); }
@@ -114,8 +127,17 @@ async function renderTab() {
 // ---------------------------------------------------------------------------
 function renderPeriodsTab(body) {
   body.innerHTML = `
-    <div class="page-header"><div></div><div class="page-header__actions"><button class="btn btn-primary" id="md-add-period">${icon('plus', 15)} Buat Periode Baru</button></div></div>
-    <div id="md-period-list"></div>
+    <div class="ux-stack">
+      <div class="card ux-table-card">
+        <div class="ux-table-head">
+          <span class="ux-table-head__icon">${icon('calendar', 18)}</span>
+          <h3>Daftar Periode</h3>
+          <span class="ux-count" id="md-count"></span>
+          <button class="btn btn-primary" id="md-add-period">${icon('plus', 16)} Buat Periode Baru</button>
+        </div>
+        <div id="md-period-list"></div>
+      </div>
+    </div>
   `;
   document.getElementById('md-add-period').addEventListener('click', openCreatePeriodForm);
   renderPeriodList();
@@ -126,7 +148,9 @@ function renderPeriodList() {
   if (!root) return;
   const periods = (getLookups()?.periods || []).slice()
     .sort((a, b) => (b.year - a.year) || (b.month - a.month));
-  if (!periods.length) { root.innerHTML = emptyState('Belum ada Periode', 'Buat periode baru dengan tombol di atas.'); return; }
+  const periodCount = document.getElementById('md-count');
+  if (periodCount) periodCount.textContent = `${periods.length.toLocaleString('id-ID')} data`;
+  if (!periods.length) { root.innerHTML = emptyState('Belum ada Periode', 'Buat periode baru dengan tombol di atas.', icon('calendar', 30)); return; }
   root.innerHTML = `<div class="table-wrap"><table class="data-table">
     <thead><tr><th>Periode</th><th>Status</th><th class="num">Aksi</th></tr></thead>
     <tbody>${periods.map((p) => {
@@ -136,7 +160,7 @@ function renderPeriodList() {
         <td>${escapeHtml(formatPeriodLabel(p))}</td>
         <td>${badge(isClosed ? 'Closed' : 'Open', isClosed ? 'neutral' : 'success')}</td>
         <td class="row-actions">
-          <button class="btn btn-outline btn-sm btn-icon" data-act="edit-period" title="${isClosed ? 'Buka kembali periode ini dari Rekap Bulanan untuk mengedit' : 'Edit'}" ${isClosed ? 'disabled' : ''}>${icon('edit', 15)}</button>
+          <button class="btn btn-outline btn-sm btn-icon ux-act ux-act--edit" data-act="edit-period" aria-label="Edit" title="${isClosed ? 'Buka kembali periode ini dari Rekap Bulanan untuk mengedit' : 'Edit'}" ${isClosed ? 'disabled' : ''}>${icon('edit', 15)}</button>
         </td>
       </tr>`;
     }).join('')}
@@ -575,15 +599,16 @@ async function invalidateAfterWrite(entityKey) {
 function renderList(cfg, rows) {
   const root = document.getElementById('md-list');
   if (!root) return;
-  if (!rows.length) { root.innerHTML = emptyState(`Belum ada ${cfg.label}`, 'Tambahkan data baru di atas.'); return; }
+  renderMasterKpis(cfg, rows);
+  if (!rows.length) { root.innerHTML = emptyState(`Belum ada ${cfg.label}`, 'Tambahkan data baru dengan tombol di atas.', icon('inbox', 30)); return; }
   root.innerHTML = `<div class="table-wrap"><table class="data-table">
     <thead><tr>${cfg.columns.map((c) => `<th class="${c.align === 'num' ? 'num' : ''}">${escapeHtml(c.label)}</th>`).join('')}<th class="num">Aksi</th></tr></thead>
     <tbody>${rows.map((r, i) => `
       <tr data-idx="${i}">
         ${cfg.columns.map((c) => `<td class="${c.align === 'num' ? 'num' : ''}">${c.format ? c.format(r) : escapeHtml(r[c.key] ?? '-')}</td>`).join('')}
         <td class="row-actions">
-          <button class="btn btn-outline btn-sm btn-icon" data-act="edit" title="Edit">${icon('edit', 15)}</button>
-          ${cfg.noDeactivate ? '' : `<button class="btn btn-outline btn-sm btn-icon" data-act="toggle" title="${r.active === false ? 'Aktifkan' : 'Nonaktifkan'}">${icon(r.active === false ? 'check' : 'trash', 15)}</button>`}
+          <button class="btn btn-outline btn-sm btn-icon ux-act ux-act--edit" data-act="edit" title="Edit" aria-label="Edit">${icon('edit', 15)}</button>
+          ${cfg.noDeactivate ? '' : `<button class="btn btn-outline btn-sm btn-icon ux-act ${r.active === false ? 'ux-act--ok' : 'ux-act--del'}" data-act="toggle" title="${r.active === false ? 'Aktifkan' : 'Nonaktifkan'}" aria-label="${r.active === false ? 'Aktifkan' : 'Nonaktifkan'}">${icon(r.active === false ? 'check' : 'trash', 15)}</button>`}
         </td>
       </tr>`).join('')}
     </tbody>
@@ -595,6 +620,27 @@ function renderList(cfg, rows) {
       else toggleActive(cfg, row);
     });
   });
+}
+
+// Kartu ringkasan di atas daftar (hanya hitungan dari baris yang sudah dimuat).
+function renderMasterKpis(cfg, rows) {
+  const kp = document.getElementById('md-kpis');
+  const cnt = document.getElementById('md-count');
+  if (cnt) cnt.textContent = `${rows.length.toLocaleString('id-ID')} data`;
+  if (!kp) return;
+  const total = rows.length;
+  const off = rows.filter((r) => r.active === false).length;
+  const card = (cls, ic, label, value, sub) => `<article class="kpi-hero${cls}">
+      <div class="kpi-hero__top"><span class="kpi-hero__icon">${icon(ic, 22)}</span><div class="kpi-hero__label">${escapeHtml(label)}</div></div>
+      <div class="kpi-hero__value">${value.toLocaleString('id-ID')}</div>
+      <div class="kpi-hero__meta"><div class="kh-sub">${escapeHtml(sub)}</div></div></article>`;
+  kp.innerHTML = cfg.noDeactivate
+    ? `<div class="kpi-hero-grid ux-hero-grid" data-n="1">${card('', 'list', `Total ${cfg.label}`, total, 'data tercatat')}</div>`
+    : `<div class="kpi-hero-grid ux-hero-grid" data-n="3">
+        ${card('', 'list', `Total ${cfg.label}`, total, 'data tercatat')}
+        ${card(' kpi-hero--omzet', 'check', 'Aktif', total - off, 'dapat dipakai transaksi')}
+        ${card(' kpi-hero--gaji', 'lock', 'Nonaktif', off, 'tidak muncul di pilihan')}
+      </div>`;
 }
 
 async function toggleActive(cfg, row) {

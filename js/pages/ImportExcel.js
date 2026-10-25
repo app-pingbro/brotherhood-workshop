@@ -501,13 +501,18 @@ export async function render(container) {
   pendingModule = null;
 
   container.innerHTML = `
-    <div class="page-header">
-      <div><h1>Import Excel</h1><div class="subtitle">Input massal Jahit/Sablon/Penggajian/Kasbon/Pengeluaran lewat SATU file .xlsx &mdash; harga/tarif selalu dihitung server, bukan dari file. Sheet yang kosong dilewati; data yang sudah ada diperbarui otomatis, tidak diduplikat.</div></div>
-      <div class="page-header__actions"><button class="btn btn-secondary" id="dl-export" title="Unduh transaksi periode ini lengkap dengan kolom ID Transaksi — dasar paling aman untuk mengedit lalu mengimpor ulang">${icon('download', 15)} Unduh Data Periode (dengan ID)</button><button class="btn btn-secondary" id="dl-template">${icon('download', 15)} Unduh Template Excel</button></div>
+   <div class="imp-page">
+    <div class="page-header rk-header ux-head">
+      <div class="rk-title">
+        <div class="page-icon">${icon('upload', 20)}</div>
+        <div><h1>Import Excel</h1><div class="subtitle">Input massal Jahit/Sablon/Penggajian/Kasbon/Pengeluaran lewat SATU file .xlsx &mdash; harga/tarif selalu dihitung server, bukan dari file. Sheet yang kosong dilewati; data yang sudah ada diperbarui otomatis, tidak diduplikat.</div></div>
+      </div>
+      <div class="page-header__actions ux-actions"><button class="btn btn-secondary" id="dl-export" title="Unduh transaksi periode ini lengkap dengan kolom ID Transaksi — dasar paling aman untuk mengedit lalu mengimpor ulang">${icon('download', 15)} Unduh Data Periode (dengan ID)</button><button class="btn btn-secondary" id="dl-template">${icon('download', 15)} Unduh Template Excel</button></div>
     </div>
     ${cameFrom ? `<div class="notice notice-info mb-12">${icon('file', 15)} Anda datang dari halaman <strong>${escapeHtml(cameFrom)}</strong> &mdash; isi sheet <strong>${escapeHtml(MODULE_SHEET_HINT[cameFromKey] || cameFrom)}</strong> di template, sheet lain boleh dikosongkan.</div>` : ''}
     <div class="wizard-steps" id="wizard-steps"></div>
     <div class="card" id="wizard-body"></div>
+   </div>
   `;
 
   document.getElementById('dl-template').addEventListener('click', downloadTemplate);

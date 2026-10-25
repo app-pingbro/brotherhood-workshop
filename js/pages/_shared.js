@@ -149,10 +149,10 @@ export async function renderCrudPage(container, opts) {
 
   if (!period) {
     lockEl.style.display = 'flex';
-    lockEl.innerHTML = `${icon('alert')} Pilih periode terlebih dahulu di bagian atas untuk melihat dan menambah data.`;
+    lockEl.innerHTML = `${icon('alert')} <div>Pilih periode terlebih dahulu di bagian atas untuk melihat dan menambah data.</div>`;
   } else if (isClosed && opts.periodRequired !== false) {
     lockEl.style.display = 'flex';
-    lockEl.innerHTML = `${icon('lock')} Periode <strong>${escapeHtml(formatPeriodLabel(period))}</strong> berstatus <strong>CLOSED</strong> &mdash; data hanya bisa dilihat. Buka kembali periode ini dari Rekap Bulanan untuk mengedit.`;
+    lockEl.innerHTML = `${icon('lock')} <div>Periode <strong>${escapeHtml(formatPeriodLabel(period))}</strong> berstatus <strong>CLOSED</strong> &mdash; data hanya bisa dilihat. Buka kembali periode ini dari Rekap Bulanan untuk mengedit.</div>`;
   }
 
   // Header action(s): tombol bantu (Import/Template) dulu, aksi utama "Tambah Data" di paling kanan.
@@ -243,14 +243,16 @@ export async function renderCrudPage(container, opts) {
     if (!opts.kpis) return;
     const items = opts.kpis(viewRows) || [];
     kpisEl.style.display = items.length ? '' : 'none';
-    kpisEl.innerHTML = `<div class="ux-kpi-grid" data-n="${items.length}">${items.map((k) => `
-      <article class="ux-kpi ux-kpi--${k.tone || 'success'}">
-        <span class="ux-kpi__icon">${icon(k.icon || 'list', 22)}</span>
-        <div class="ux-kpi__body">
-          <div class="ux-kpi__label">${escapeHtml(k.label)}</div>
-          <div class="ux-kpi__value">${escapeHtml(k.value)}</div>
-          ${k.unit ? `<div class="ux-kpi__unit">${escapeHtml(k.unit)}</div>` : ''}
+    // Memakai komponen kartu KPI yang sama dengan Dashboard (.kpi-hero).
+    const TONE = { success: '', info: ' kpi-hero--omzet', critical: ' kpi-hero--keluar', highlight: ' kpi-hero--hasil', warning: ' kpi-hero--gaji' };
+    kpisEl.innerHTML = `<div class="kpi-hero-grid ux-hero-grid" data-n="${items.length}">${items.map((k) => `
+      <article class="kpi-hero${TONE[k.tone || 'success'] || ''}">
+        <div class="kpi-hero__top">
+          <span class="kpi-hero__icon">${icon(k.icon || 'list', 22)}</span>
+          <div class="kpi-hero__label">${escapeHtml(k.label)}</div>
         </div>
+        <div class="kpi-hero__value">${escapeHtml(k.value)}</div>
+        <div class="kpi-hero__meta"><div class="kh-sub">${k.unit ? escapeHtml(k.unit) : '&nbsp;'}</div></div>
       </article>`).join('')}</div>`;
   }
 
