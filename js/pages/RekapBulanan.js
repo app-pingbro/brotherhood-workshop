@@ -7,9 +7,10 @@
 //
 // "Saldo Awal" yang ditampilkan = saldoAwalFinal dari backend (satu-satunya
 // nilai saldo awal yang dipakai Rekap, Dashboard, dan saldo akhir periode ini
-// yang kemudian menjadi saldo awal periode berikutnya). Komponen internalnya
-// (otomatis, koreksi tersimpan, saldo awal input) TIDAK lagi diperlihatkan di
-// UI, tetapi tetap ikut terhitung di backend dan datanya tidak dihapus.
+// yang kemudian menjadi saldo awal periode berikutnya). Sumbernya: Saldo Akhir
+// periode sebelumnya + Saldo Awal yang diinput di Master Data > Saldo & Piutang
+// Awal. "Koreksi Manual" tidak dipakai lagi (backend mengabaikannya; datanya
+// tidak dihapus).
 // Saldo Akhir dibaca langsung dari backend -- tidak dihitung ulang di sini.
 // Tidak ada rumus yang berubah di file ini.
 //
@@ -253,7 +254,7 @@ function saldoValues(recap) {
   // Saldo Awal (input) — saldo kas sebelum aplikasi dipakai (Master Data >
   // Saldo & Piutang Awal). 0 (dan kotaknya tidak tampil) sampai ada yang diinput.
   const saldoAwalInput = Number(recap.saldoAwalAwal) || 0;
-  const saldoAwalFinal = Number(pick(recap, ['saldoAwalFinal', 'saldo_awal_final'], saldoAwalOtomatis + saldoAwalKoreksi + saldoAwalInput)) || 0;
+  const saldoAwalFinal = Number(pick(recap, ['saldoAwalFinal', 'saldo_awal_final'], saldoAwalOtomatis + saldoAwalInput)) || 0;
   const hasilBulan = Number(pick(recap, ['hasilBulan', 'hasil_bulan'])) || 0;
   // Bayar / Terima Owner (Dashboard) — perpindahan kas, BUKAN Pengeluaran/Pemasukan,
   // jadi tidak ikut Hasil Bulan; hanya menggeser Saldo Akhir. 0 sampai dipakai.
@@ -284,7 +285,7 @@ function renderSaldo(recap) {
       </div>
 
       <div class="rk-eq">
-        ${box('Saldo Awal', v.saldoAwalFinal, 'saldo akhir bulan lalu / saldo awal yang ditetapkan')}
+        ${box('Saldo Awal', v.saldoAwalFinal, 'saldo akhir bulan lalu + Saldo &amp; Piutang Awal')}
         ${op('+')}
         ${box('Hasil Bulan', v.hasilBulan, 'Pemasukan − Pengeluaran')}
         ${v.bayarOwner !== 0 ? `${op('−')}${box('Pembayaran ke Owner', v.bayarOwner, 'Bayar di Dashboard; bukan Pengeluaran')}` : ''}
@@ -428,7 +429,7 @@ function renderFormulaCard() {
     <div class="rk-formulas">
       <div class="rk-formula"><b>Hasil Bulan</b> = Total Pemasukan &minus; Total Biaya</div>
       <div class="rk-formula"><b>Total Biaya</b> = Pengeluaran PINGBRO + Pengeluaran SUNRISE</div>
-      <div class="rk-formula"><b>Saldo Awal</b> = Saldo Akhir periode sebelumnya, atau saldo awal yang sudah ditetapkan</div>
+      <div class="rk-formula"><b>Saldo Awal</b> = Saldo Akhir periode sebelumnya + Saldo Awal periode ini dari Master Data &rsaquo; Saldo &amp; Piutang Awal</div>
       <div class="rk-formula"><b>Saldo Akhir</b> = Saldo Awal + Hasil Bulan (&minus; Pembayaran Owner + Penerimaan Owner bila ada)</div>
     </div>
     <ul class="rk-notes">
