@@ -211,7 +211,7 @@ function computeKasbonTotal(deductions) {
 
 // ---- 4 kartu utama ---------------------------------------------------------
 // Semua dari satu respons getMonthlyRecap (tanpa request tambahan):
-//   Saldo Kas Perusahaan = saldoAkhir  (Saldo Awal Final + Hasil Bulan + Bayar - Terima;
+//   Saldo Kas Perusahaan = saldoAkhir  (Saldo Awal Final + Bayar - Terima; Hasil Bulan TIDAK ikut;
 //                          SATU angka perusahaan dari rantai saldo backend — BUKAN
 //                          jumlah saldo per Owner, jadi tidak pernah terhitung ganda)
 //   Total Omzet          = totalPemasukan      Total Pengeluaran = totalBiaya
@@ -226,7 +226,7 @@ function renderKpis(recap) {
   const totalPengeluaran = Number(pick(recap, ['totalBiaya', 'total_biaya'])) || 0;
   const hasilBersih = Number(pick(recap, ['hasilBulan', 'hasil_bulan'], totalOmzet - totalPengeluaran)) || 0;
   const saldoAwalFinal = Number(pick(recap, ['saldoAwalFinal', 'saldo_awal_final'])) || 0;
-  const saldoKas = Number(pick(recap, ['saldoAkhir', 'saldo_akhir'], saldoAwalFinal + hasilBersih)) || 0;
+  const saldoKas = Number(pick(recap, ['saldoAkhir', 'saldo_akhir'], saldoAwalFinal)) || 0;
   const perOwner = Object.values(recap.perOwner || {});
   const omzetJahit = perOwner.reduce((s, o) => s + (Number(o.jahit) || 0), 0);
   const omzetSablon = perOwner.reduce((s, o) => s + (Number(o.sablon) || 0), 0);

@@ -1,7 +1,7 @@
 // ============================================================================
 // Rekap Bulanan — ringkasan KPI (Omzet Jahit/Sablon, Total Pemasukan, Total
 // Pengeluaran, Hasil Bersih, Saldo Akhir), perhitungan saldo (Saldo Awal +
-// Hasil Bulan = Saldo Akhir), tabel Piutang & Pembayaran Owner, matriks
+// Bayar Owner − Terima Owner = Saldo Akhir; Hasil Bulan tidak ikut), tabel Piutang & Pembayaran Owner, matriks
 // "Rincian Perhitungan", penjelasan rumus dan kontrol Tutup/Buka Kembali
 // periode (reopen wajib beralasan, sesuai aturan audit PRD).
 //
@@ -261,15 +261,14 @@ function saldoValues(recap) {
   // Terima = kas keluar −). 0 sampai dipakai.
   const bayarOwner = Number(recap.pembayaranOwner) || 0;
   const terimaOwner = Number(recap.penerimaanOwner) || 0;
-  const saldoAkhir = Number(pick(recap, ['saldoAkhir', 'saldo_akhir'], saldoAwalFinal + hasilBulan + bayarOwner - terimaOwner)) || 0;
+  const saldoAkhir = Number(pick(recap, ['saldoAkhir', 'saldo_akhir'], saldoAwalFinal + bayarOwner - terimaOwner)) || 0;
   return { saldoAwalOtomatis, saldoAwalKoreksi, saldoAwalInput, saldoAwalFinal, hasilBulan, bayarOwner, terimaOwner, saldoAkhir };
 }
 
 // Kartu "Perhitungan Saldo": satu persamaan sederhana —
-//   Saldo Awal + Hasil Bulan = Saldo Akhir
-// Bila periode ini punya Bayar/Terima Owner (perpindahan kas, bukan
-// pemasukan/pengeluaran), barisnya muncul di persamaan yang sama supaya angka
-// tetap cocok; bila 0 (kasus umum) kotaknya tidak tampil.
+//   Saldo Awal (+ Bayar Owner − Terima Owner bila ada) = Saldo Akhir
+// Hasil Bulan TIDAK ikut mengubah saldo kas (keputusan pemilik); ditampilkan
+// terpisah sebagai informasi di bawah persamaan.
 function renderSaldo(recap) {
   const root = document.getElementById('saldo-section');
   if (!root) return;
@@ -282,18 +281,17 @@ function renderSaldo(recap) {
     <div class="card rk-saldo">
       <div class="rk-card-head">
         <span class="rk-card-icon">${icon('wallet', 18)}</span>
-        <div><h3>Perhitungan Saldo</h3><small>Saldo Awal + Hasil Bulan = Saldo Akhir</small></div>
+        <div><h3>Perhitungan Saldo</h3><small>Saldo Awal + Bayar Owner − Terima Owner = Saldo Akhir</small></div>
       </div>
 
       <div class="rk-eq">
         ${box('Saldo Awal', v.saldoAwalFinal, 'saldo akhir bulan lalu + Saldo &amp; Piutang Awal')}
-        ${op('+')}
-        ${box('Hasil Bulan', v.hasilBulan, 'Pemasukan − Pengeluaran')}
         ${v.bayarOwner !== 0 ? `${op('+')}${box('Bayar Owner', v.bayarOwner, 'kas masuk; Bayar di Dashboard, bukan Pemasukan')}` : ''}
         ${v.terimaOwner !== 0 ? `${op('−')}${box('Terima Owner', v.terimaOwner, 'kas keluar; Terima di Dashboard, bukan Pengeluaran')}` : ''}
         ${op('=')}
         ${box('Saldo Akhir', v.saldoAkhir, 'saldo kas akhir periode', 'rk-eq__box--result')}
       </div>
+      <p class="rk-note">Hasil Bulan (Pemasukan − Pengeluaran) = <b>${money(v.hasilBulan)}</b> &mdash; ditampilkan sebagai informasi, tidak mengubah Saldo Kas Perusahaan.</p>
     </div>`;
 }
 
@@ -431,7 +429,7 @@ function renderFormulaCard() {
       <div class="rk-formula"><b>Hasil Bulan</b> = Total Pemasukan &minus; Total Biaya</div>
       <div class="rk-formula"><b>Total Biaya</b> = Pengeluaran PINGBRO + Pengeluaran SUNRISE</div>
       <div class="rk-formula"><b>Saldo Awal</b> = Saldo Akhir periode sebelumnya + Saldo Awal periode ini dari Master Data &rsaquo; Saldo &amp; Piutang Awal</div>
-      <div class="rk-formula"><b>Saldo Akhir</b> = Saldo Awal + Hasil Bulan (+ Bayar Owner &minus; Terima Owner bila ada)</div>
+      <div class="rk-formula"><b>Saldo Akhir</b> = Saldo Awal + Bayar Owner &minus; Terima Owner (Hasil Bulan tidak ikut)</div>
     </div>
     <ul class="rk-notes">
       <li>Gaji &amp; Lembur sudah tercatat di Pengeluaran (dibayar Owner PINGBRO/SUNRISE), jadi tidak dihitung dua kali di Total Biaya.</li>
