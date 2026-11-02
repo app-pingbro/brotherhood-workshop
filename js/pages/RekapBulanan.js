@@ -257,10 +257,11 @@ function saldoValues(recap) {
   const saldoAwalFinal = Number(pick(recap, ['saldoAwalFinal', 'saldo_awal_final'], saldoAwalOtomatis + saldoAwalInput)) || 0;
   const hasilBulan = Number(pick(recap, ['hasilBulan', 'hasil_bulan'])) || 0;
   // Bayar / Terima Owner (Dashboard) — perpindahan kas, BUKAN Pengeluaran/Pemasukan,
-  // jadi tidak ikut Hasil Bulan; hanya menggeser Saldo Akhir. 0 sampai dipakai.
+  // jadi tidak ikut Hasil Bulan; hanya menggeser Saldo Akhir (Bayar = kas masuk +,
+  // Terima = kas keluar −). 0 sampai dipakai.
   const bayarOwner = Number(recap.pembayaranOwner) || 0;
   const terimaOwner = Number(recap.penerimaanOwner) || 0;
-  const saldoAkhir = Number(pick(recap, ['saldoAkhir', 'saldo_akhir'], saldoAwalFinal + hasilBulan - bayarOwner + terimaOwner)) || 0;
+  const saldoAkhir = Number(pick(recap, ['saldoAkhir', 'saldo_akhir'], saldoAwalFinal + hasilBulan + bayarOwner - terimaOwner)) || 0;
   return { saldoAwalOtomatis, saldoAwalKoreksi, saldoAwalInput, saldoAwalFinal, hasilBulan, bayarOwner, terimaOwner, saldoAkhir };
 }
 
@@ -288,8 +289,8 @@ function renderSaldo(recap) {
         ${box('Saldo Awal', v.saldoAwalFinal, 'saldo akhir bulan lalu + Saldo &amp; Piutang Awal')}
         ${op('+')}
         ${box('Hasil Bulan', v.hasilBulan, 'Pemasukan − Pengeluaran')}
-        ${v.bayarOwner !== 0 ? `${op('−')}${box('Pembayaran ke Owner', v.bayarOwner, 'Bayar di Dashboard; bukan Pengeluaran')}` : ''}
-        ${v.terimaOwner !== 0 ? `${op('+')}${box('Penerimaan dari Owner', v.terimaOwner, 'Terima di Dashboard; bukan Pemasukan')}` : ''}
+        ${v.bayarOwner !== 0 ? `${op('+')}${box('Bayar Owner', v.bayarOwner, 'kas masuk; Bayar di Dashboard, bukan Pemasukan')}` : ''}
+        ${v.terimaOwner !== 0 ? `${op('−')}${box('Terima Owner', v.terimaOwner, 'kas keluar; Terima di Dashboard, bukan Pengeluaran')}` : ''}
         ${op('=')}
         ${box('Saldo Akhir', v.saldoAkhir, 'saldo kas akhir periode', 'rk-eq__box--result')}
       </div>
@@ -430,12 +431,12 @@ function renderFormulaCard() {
       <div class="rk-formula"><b>Hasil Bulan</b> = Total Pemasukan &minus; Total Biaya</div>
       <div class="rk-formula"><b>Total Biaya</b> = Pengeluaran PINGBRO + Pengeluaran SUNRISE</div>
       <div class="rk-formula"><b>Saldo Awal</b> = Saldo Akhir periode sebelumnya + Saldo Awal periode ini dari Master Data &rsaquo; Saldo &amp; Piutang Awal</div>
-      <div class="rk-formula"><b>Saldo Akhir</b> = Saldo Awal + Hasil Bulan (&minus; Pembayaran Owner + Penerimaan Owner bila ada)</div>
+      <div class="rk-formula"><b>Saldo Akhir</b> = Saldo Awal + Hasil Bulan (+ Bayar Owner &minus; Terima Owner bila ada)</div>
     </div>
     <ul class="rk-notes">
       <li>Gaji &amp; Lembur sudah tercatat di Pengeluaran (dibayar Owner PINGBRO/SUNRISE), jadi tidak dihitung dua kali di Total Biaya.</li>
       <li>Kasbon &amp; Potongan memotong Slip Gaji pekerja, bukan biaya Owner &mdash; &ldquo;Total Bersih&rdquo; di rincian hanya informasi.</li>
-      <li>Bayar/Terima Owner hanya menggeser Saldo Akhir, bukan Pengeluaran atau Pemasukan.</li>
+      <li>Bayar Owner = kas masuk (+), Terima Owner = kas keluar (&minus;). Keduanya hanya menggeser Saldo Akhir, bukan Pengeluaran atau Pemasukan.</li>
       <li>Semua angka mengikuti periode yang dipilih di kanan atas.</li>
     </ul>`;
 }

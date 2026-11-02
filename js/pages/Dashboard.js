@@ -144,8 +144,8 @@ async function loadRecapSection(period) {
     period,
     getOwner: (ownerId) => (latestRecap && latestRecap.perOwner ? latestRecap.perOwner[ownerId] : null),
     getSaldo: () => (latestRecap ? Number(pick(latestRecap, ['saldoAkhir', 'saldo_akhir'])) || 0 : 0),
-    // Bayar (PAYMENT): total shrinks, company saldo shrinks.
-    // Terima (RECEIPT): total moves toward 0 (+), company saldo grows.
+    // Bayar (PAYMENT): total shrinks, company saldo grows (kas masuk +).
+    // Terima (RECEIPT): total moves toward 0 (+), company saldo shrinks (kas keluar -).
     patchSettled: (ownerId, kind, nominal) => {
       const po = latestRecap && latestRecap.perOwner ? latestRecap.perOwner[ownerId] : null;
       if (!po || !(nominal > 0)) return;
@@ -158,7 +158,7 @@ async function loadRecapSection(period) {
         po.dibayar = (Number(po.dibayar) || 0) + nominal;
         latestRecap.pembayaranOwner = (Number(latestRecap.pembayaranOwner) || 0) + nominal;
       }
-      latestRecap.saldoAkhir = (Number(pick(latestRecap, ['saldoAkhir', 'saldo_akhir'])) || 0) + sign * nominal; // same direction as the total
+      latestRecap.saldoAkhir = (Number(pick(latestRecap, ['saldoAkhir', 'saldo_akhir'])) || 0) - sign * nominal; // Bayar +, Terima -  (kebalikan arah Total)
       repaint();
     },
     refresh: () => fetchSWR('getMonthlyRecap', { period_id: period.id }, onRecap, { force: true }).catch(() => {})
@@ -211,7 +211,7 @@ function computeKasbonTotal(deductions) {
 
 // ---- 4 kartu utama ---------------------------------------------------------
 // Semua dari satu respons getMonthlyRecap (tanpa request tambahan):
-//   Saldo Kas Perusahaan = saldoAkhir  (Saldo Awal Final + Hasil Bulan - Bayar + Terima;
+//   Saldo Kas Perusahaan = saldoAkhir  (Saldo Awal Final + Hasil Bulan + Bayar - Terima;
 //                          SATU angka perusahaan dari rantai saldo backend — BUKAN
 //                          jumlah saldo per Owner, jadi tidak pernah terhitung ganda)
 //   Total Omzet          = totalPemasukan      Total Pengeluaran = totalBiaya

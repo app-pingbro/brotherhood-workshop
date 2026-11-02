@@ -97,8 +97,8 @@ export function openVoidModal(entry, onDone) {
 // BAYAR / TERIMA modal (Dashboard)
 // opts: { ownerId, period, total, saldo, prefill?, reqId?, onSaved(entry, duplicate), onChanged() }
 //   total = Total Harus Dibayar currently shown on the panel
-//           > 0  -> Bayar   (perusahaan membayar Owner; Saldo Perusahaan turun)
-//           < 0  -> Terima  (perusahaan menerima dari Owner; Saldo Perusahaan naik)
+//           > 0  -> Bayar   (kas MASUK: Saldo Perusahaan naik)
+//           < 0  -> Terima  (kas KELUAR: Saldo Perusahaan turun)
 //   saldo = Saldo Perusahaan (Saldo Akhir periode ini) currently shown
 // Flow: Total Harus Dibayar -> Bayar/Terima -> nominal -> Konfirmasi.
 // ---------------------------------------------------------------------------
@@ -142,7 +142,7 @@ export function openSettleModal(opts) {
         const n = parseDigits(raw);
         const saldoEl = body.querySelector('#settle-saldo-after');
         const sisaEl = body.querySelector('#settle-sisa-after');
-        if (saldoEl) saldoEl.textContent = rp(saldo + (isPay ? -n : n));
+        if (saldoEl) saldoEl.textContent = rp(saldo + (isPay ? n : -n));
         if (sisaEl) sisaEl.textContent = rp(total + (isPay ? -n : n));
       };
       updatePreview(values.nominal);
@@ -150,8 +150,8 @@ export function openSettleModal(opts) {
       buildForm(body.querySelector('#bayar-form-root'), [
         { key: 'nominal', label: isPay ? 'Nominal Pembayaran' : 'Nominal Diterima', type: 'number', required: true, min: 1,
           onChange: (vals) => updatePreview(vals.nominal),
-          hint: isPay ? `Pembayaran mengurangi Total Harus Dibayar dan Saldo Perusahaan. Maksimal ${rp(absTotal)}.`
-                      : `Penerimaan menambah Saldo Perusahaan dan menggeser Total Harus Dibayar ke Rp0. Maksimal ${rp(absTotal)}.` },
+          hint: isPay ? `Pembayaran mengurangi Total Harus Dibayar dan dicatat sebagai kas masuk (menambah Saldo Perusahaan). Maksimal ${rp(absTotal)}.`
+                      : `Penerimaan menggeser Total Harus Dibayar ke Rp0 dan dicatat sebagai kas keluar (mengurangi Saldo Perusahaan). Maksimal ${rp(absTotal)}.` },
         { key: 'tanggal', label: isPay ? 'Tanggal Pembayaran' : 'Tanggal Penerimaan', type: 'date', required: true },
         { key: 'keterangan', label: 'Keterangan (opsional)', type: 'textarea', fullWidth: true }
       ], values, null, async (v) => {
@@ -278,7 +278,7 @@ export function renderLedgerTab(body) {
       </div>`).join('')}
     <div class="card" id="led-PAYMENT">
       <div class="ledger-section-head"><h3>Riwayat Pembayaran &amp; Penerimaan</h3></div>
-      <p class="ledger-hint">Semua Bayar / Terima "Total Harus Dibayar" yang dicatat dari Dashboard. Yang salah dapat dibatalkan — catatannya tetap tersimpan di sini. Bayar/Terima memindahkan kas (Saldo Perusahaan), bukan Pengeluaran.</p>
+      <p class="ledger-hint">Semua Bayar / Terima "Total Harus Dibayar" yang dicatat dari Dashboard. Yang salah dapat dibatalkan — catatannya tetap tersimpan di sini. Bayar = kas masuk (+), Terima = kas keluar (−) pada Saldo Perusahaan; bukan Pengeluaran.</p>
       <div data-list>${skeletonTable(7, 2)}</div>
     </div>`;
 
